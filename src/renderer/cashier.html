@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+    <meta charset="UTF-8">
+    <title>كاشير - نظام جولة</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            background-color: #f1f3f9;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .shift-info-card {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .product-grid {
+            height: 55vh;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .bill-side {
+            background: white;
+            height: 100vh;
+            border-right: 2px solid #dee2e6;
+            padding: 20px;
+            box-shadow: -5px 0 15px rgba(0, 0, 0, 0.05);
+        }
+
+        .total-box {
+            background: #222;
+            color: #00ff00;
+            padding: 20px;
+            border-radius: 12px;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        /* --- تعديل مربع الاقتراحات الصاروخي --- */
+       .suggestions-box {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background-color: #ffffff !important; /* لون أبيض صريح */
+    border: 2px solid #0d6efd; /* برواز أزرق خفيف عشان يبان */
+    border-radius: 0 0 10px 10px;
+    z-index: 99999 !important; /* أعلى قيمة ممكنة */
+    max-height: 250px;
+    overflow-y: auto;
+    box-shadow: 0 8px 16px rgba(0,0,0,0.2) !important;
+    display: none; /* بيتحكم فيه الـ JS */
+}
+
+        .suggestions-box .list-group-item {
+            cursor: pointer;
+            padding: 12px 15px;
+            border-left: none;
+            border-right: none;
+            transition: 0.2s;
+        }
+
+        .suggestions-box .list-group-item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .table-custom-sm {
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-md-8 p-3 d-flex flex-column" style="height: 100vh;">
+
+                <div class="shift-info-card mb-3">
+                    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center py-2 px-3">
+                        <span class="small fw-bold"><i class="fas fa-cash-register me-2 text-warning"></i> عهدتك الحالية</span>
+                        <span class="badge bg-success fs-6" id="myShiftTotal">0.00 ج.م</span>
+                    </div>
+                    <div class="table-responsive" style="max-height: 120px; overflow-y: auto;">
+                        <table class="table table-sm table-hover mb-0 text-center table-custom-sm">
+                            <thead class="table-light sticky-top">
+                                <tr>
+                                    <th>رقم الفاتورة</th>
+                                    <th>الوقت</th>
+                                    <th>المبلغ</th>
+                                </tr>
+                            </thead>
+                            <tbody id="myRecentSalesTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="mb-3 position-relative">
+                    <div class="input-group input-group-lg shadow-sm">
+                        <span class="input-group-text bg-primary text-white"><i class="fas fa-barcode"></i></span>
+                        <input type="text" id="barcodeInput" class="form-control" placeholder="امسح الباركود أو ابحث عن منتج..." autofocus autocomplete="off">
+                    </div>
+                    <div id="suggestionsBox" class="list-group position-absolute w-100 suggestions-box"></div>
+                </div>
+
+                <div class="product-grid row g-3" id="productsDisplay"></div>
+            </div>
+
+            <div class="col-md-4 bill-side d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h4 class="mb-0 text-primary fw-bold"><i class="fas fa-file-invoice-dollar me-2"></i> الفاتورة</h4>
+                    <span class="text-muted small" id="currentDate"></span>
+                </div>
+
+                <div class="table-responsive flex-grow-1 border rounded bg-light">
+                    <table class="table table-sm align-middle">
+                        <thead class="table-secondary">
+                            <tr>
+                                <th>المنتج</th>
+                                <th class="text-center">الكمية</th>
+                                <th class="text-center">السعر</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="billTableBody"></tbody>
+                    </table>
+                </div>
+
+                <div class="mt-3">
+                    <div class="total-box mb-3 text-center">
+                        <small class="text-uppercase" style="letter-spacing: 2px;">الإجمالي النهائي</small>
+                        <h2 id="grandTotal" class="mb-0">0.00 ج.م</h2>
+                    </div>
+
+                    <div class="row g-2">
+                        <div class="col-12 mb-2">
+                            <div class="form-check form-switch d-flex justify-content-center align-items-center bg-light p-2 rounded border">
+                                <input class="form-check-input me-2" type="checkbox" id="shouldPrintReceipt" checked>
+                                <label class="form-check-label fw-bold" for="shouldPrintReceipt">طباعة فاتورة تلقائياً</label>
+                            </div>
+                        </div>
+                        <div class="col-8">
+                            <button id="checkoutBtn" class="btn btn-success btn-lg w-100 h-100 fw-bold">
+                                <i class="fas fa-check-circle me-2"></i> إنهاء وبيع
+                            </button>
+                        </div>
+                        <div class="col-4">
+                            <button class="btn btn-outline-danger btn-lg w-100 h-100" id="cancelBill">
+                                <i class="fas fa-trash-alt"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="./src/cashier-renderer.js"></script>
+    <script>
+        document.getElementById('currentDate').innerText = new Date().toLocaleDateString('ar-EG');
+    </script>
+</body>
+
+</html>

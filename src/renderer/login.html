@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+    <meta charset="UTF-8">
+    <title>تسجيل الدخول - جولة</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .login-card {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.2);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+        
+        .input-group-text {
+            background-color: #f8f9fa;
+            border-left: none;
+        }
+        
+        .form-control {
+            border-right: none;
+        }
+        
+        .btn-primary {
+            background-color: #1e3c72;
+            border: none;
+            padding: 12px;
+            font-weight: bold;
+        }
+        
+        .btn-primary:hover {
+            background-color: #2a5298;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="login-card shadow">
+        <div class="text-primary mb-3">
+            <i class="fas fa-user-lock fa-4x"></i>
+        </div>
+        <h3 class="mb-2 fw-bold text-dark">نظام جولة</h3>
+        <p class="text-muted mb-4">إدارة المبيعات والمخازن</p>
+
+        <div class="mb-3">
+            <div class="input-group">
+                <span class="input-group-text"><i class="fas fa-user text-muted"></i></span>
+                <input type="text" id="username" class="form-control form-control-lg" placeholder="اسم المستخدم" required>
+            </div>
+        </div>
+
+        <div class="mb-4">
+            <div class="input-group">
+                <span class="input-group-text"><i class="fas fa-key text-muted"></i></span>
+                <input type="password" id="password" class="form-control form-control-lg" placeholder="كلمة المرور" required>
+            </div>
+        </div>
+
+        <button class="btn btn-primary btn-lg w-100 mb-3" id="loginBtn">
+            <i class="fas fa-sign-in-alt me-2"></i> دخول للنظام
+        </button>
+
+        <p class="text-danger small d-none" id="errorMsg">خطأ في اسم المستخدم أو كلمة المرور!</p>
+    </div>
+
+    <script>
+        const loginBtn = document.getElementById('loginBtn');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const errorMsg = document.getElementById('errorMsg');
+
+        // دالة إرسال البيانات
+        async function attemptLogin() {
+            const username = usernameInput.value.trim();
+            const password = passwordInput.value;
+
+            if (!username || !password) {
+                alert("يرجى إدخال كافة البيانات");
+                return;
+            }
+
+            // إرسال البيانات للـ Main Process
+            // ملاحظة: تأكد أن اسم الدالة في preload هو window.api.login
+            window.api.login({
+                username: username,
+                password: password
+            });
+        }
+
+        // عند الضغط على الزر
+        loginBtn.addEventListener('click', attemptLogin);
+
+        // تفعيل الدخول بمجرد الضغط على Enter
+        [usernameInput, passwordInput].forEach(el => {
+            el.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') attemptLogin();
+            });
+        });
+
+        // استقبال رسائل الخطأ من الـ Main (اختياري)
+        if (window.api.onLoginError) {
+            window.api.onLoginError((msg) => {
+                errorMsg.innerText = msg;
+                errorMsg.classList.remove('d-none');
+            });
+        }
+    </script>
+</body>
+
+</html>

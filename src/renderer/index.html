@@ -3,62 +3,59 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' https: data:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com data:; img-src 'self' data:;">
     <title>لوحة التحكم - نظام جولة</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-
     <style>
         body {
-            background-color: #f4f7f6;
+            background-color: #f1f5f9;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            user-select: none;
         }
         
         .card {
-            border: none;
-            border-radius: 15px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
             margin-bottom: 20px;
         }
         
         .nav-tabs {
             border-bottom: none;
-            gap: 10px;
+            gap: 8px;
         }
         
         .nav-tabs .nav-link {
             border: none;
             font-weight: 600;
-            color: #6c757d;
-            padding: 10px 25px;
+            color: #64748b;
+            padding: 10px 22px;
             border-radius: 10px;
-            transition: 0.3s;
+            transition: all 0.2s;
         }
         
         .nav-tabs .nav-link.active {
             background: #0d6efd;
             color: white;
-            box-shadow: 0 4px 10px rgba(13, 110, 253, 0.3);
+            box-shadow: 0 4px 10px rgba(13, 110, 253, 0.25);
         }
         
         .stat-card {
             border-right: 5px solid;
+            background: #ffffff;
         }
         
         .stat-value {
             font-size: 1.6rem;
             font-weight: bold;
-            color: #212529;
-        }
-        
-        .table thead {
-            background-color: #f8f9fa;
+            color: #0f172a;
         }
         
         .barcode-preview-box {
-            border: 1px dashed #ccc;
-            padding: 10px;
+            border: 1px dashed #94a3b8;
+            padding: 12px;
             border-radius: 10px;
-            background: #fff;
+            background: #ffffff;
             display: inline-block;
         }
     </style>
@@ -69,15 +66,16 @@
     <nav class="navbar navbar-dark bg-primary mb-4 shadow-sm">
         <div class="container">
             <span class="navbar-brand mb-0 h1"><i class="fas fa-shield-alt me-2"></i> لوحة الإدارة - نظام جولة</span>
-            <button class="btn btn-outline-light btn-sm" onclick="window.location.reload()"><i class="fas fa-sync"></i> تحديث النظام</button>
+            <button class="btn btn-outline-light btn-sm" onclick="window.location.reload()"><i class="fas fa-sync-alt me-1"></i> تحديث البيانات</button>
         </div>
     </nav>
 
-    <div class="container">
+    <div class="container pb-5">
+        <!-- كروت الإحصائيات المالية -->
         <div class="row g-3 mb-4 text-center">
             <div class="col-md-4">
                 <div class="card p-3 stat-card border-primary">
-                    <small class="text-muted fw-bold text-uppercase">قيمة المخزن (شراء)</small>
+                    <small class="text-muted fw-bold text-uppercase">قيمة المخزن (تكلفة الشراء)</small>
                     <div class="stat-value" id="totalPurchaseValue">0.00 ج.م</div>
                 </div>
             </div>
@@ -89,46 +87,51 @@
             </div>
             <div class="col-md-4">
                 <div class="card p-3 stat-card border-warning">
-                    <small class="text-muted fw-bold text-uppercase">إجمالي الأصناف</small>
+                    <small class="text-muted fw-bold text-uppercase">إجمالي عدد الأصناف</small>
                     <div class="stat-value" id="totalItemsCount">0</div>
                 </div>
             </div>
         </div>
 
+        <!-- ألسنة التبويب -->
         <ul class="nav nav-tabs mb-4 p-2 bg-white rounded-3 shadow-sm" id="adminTabs" role="tablist">
             <li class="nav-item">
-                <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#list-tab"><i class="fas fa-boxes me-1"></i> المخزن</button>
+                <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#list-tab"><i class="fas fa-boxes me-1"></i> إدارة المخزن</button>
             </li>
             <li class="nav-item">
-                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#add-tab"><i class="fas fa-plus-circle me-1"></i> إضافة بضاعة</button>
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#add-tab"><i class="fas fa-plus-circle me-1"></i> إضافة بضاعة وأقسام</button>
             </li>
             <li class="nav-item">
-                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#users-tab"><i class="fas fa-user-friends me-1"></i> الموظفين والعهدة</button>
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#users-tab"><i class="fas fa-user-shield me-1"></i> الموظفين والعهد</button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#settings-tab"><i class="fas fa-sliders-h me-1"></i> إعدادات المتجر والفاتورة</button>
             </li>
         </ul>
 
         <div class="tab-content">
 
+            <!-- تبويب المخزن -->
             <div class="tab-pane fade show active" id="list-tab">
                 <div class="card p-4">
                     <div class="d-flex mb-3 gap-2">
                         <div class="input-group">
-                            <span class="input-group-text"><i class="fas fa-search"></i></span>
-                            <input type="text" id="searchInput" class="form-control" placeholder="بحث باسم المنتج أو الباركود...">
+                            <span class="input-group-text bg-white"><i class="fas fa-search text-muted"></i></span>
+                            <input type="text" id="searchInput" class="form-control" placeholder="بحث بالاسم أو الباركود...">
                         </div>
                     </div>
                     <div class="table-responsive">
-                        <table class="table table-hover align-middle">
-                            <thead>
+                        <table class="table table-hover align-middle text-center mb-0">
+                            <thead class="table-light">
                                 <tr>
-                                    <th>#</th>
+                                    <th>الباركود</th>
                                     <th>القسم</th>
-                                    <th>المنتج</th>
+                                    <th>اسم المنتج</th>
                                     <th>الكمية</th>
-                                    <th>الشراء</th>
-                                    <th>البيع</th>
-                                    <th>صافي الربح</th>
-                                    <th>العمليات</th>
+                                    <th>سعر الشراء</th>
+                                    <th>سعر البيع</th>
+                                    <th>الربح/قطعة</th>
+                                    <th>إجراءات</th>
                                 </tr>
                             </thead>
                             <tbody id="inventoryTableBody"></tbody>
@@ -137,26 +140,27 @@
                 </div>
             </div>
 
+            <!-- تبويب الإضافة -->
             <div class="tab-pane fade" id="add-tab">
-                <div class="row">
+                <div class="row g-3">
                     <div class="col-md-4">
                         <div class="card p-4 h-100">
-                            <h5><i class="fas fa-tags me-2 text-success"></i> قسم جديد</h5>
+                            <h5><i class="fas fa-folder-plus me-2 text-success"></i> قسم جديد</h5>
                             <form id="categoryForm" class="mt-3">
-                                <input type="text" class="form-control mb-3" id="categoryName" placeholder="مثلاً: إكسسوارات، موبايلات" required>
-                                <button type="submit" class="btn btn-success w-100">حفظ القسم</button>
+                                <input type="text" class="form-control mb-3" id="categoryName" placeholder="مثلاً: مشروبات، إلكترونيات" required>
+                                <button type="submit" class="btn btn-success w-100 fw-bold">حفظ القسم</button>
                             </form>
                         </div>
                     </div>
                     <div class="col-md-8">
                         <div class="card p-4">
-                            <h5><i class="fas fa-cart-plus me-2 text-primary"></i> إضافة منتج جديد</h5>
+                            <h5><i class="fas fa-cart-plus me-2 text-primary"></i> إضافة صنف جديد</h5>
                             <form id="productForm" class="mt-3">
                                 <div class="row g-3">
                                     <div class="col-md-12">
                                         <div class="input-group">
                                             <span class="input-group-text bg-dark text-white"><i class="fas fa-barcode"></i></span>
-                                            <input type="text" class="form-control" id="productBarcode" placeholder="امسح الباركود أو اكتبه">
+                                            <input type="text" class="form-control" id="productBarcode" placeholder="امسح الباركود أو اتركه للتوليد">
                                             <button class="btn btn-secondary" type="button" id="genBarcodeBtn">توليد آلي</button>
                                         </div>
                                         <div class="text-center mt-3">
@@ -171,35 +175,36 @@
                                     </div>
                                     <div class="col-md-6">
                                         <label class="form-label small fw-bold">اسم المنتج</label>
-                                        <input type="text" class="form-control" id="productName" placeholder="مثلاً: سماعة بلوتوث" required>
+                                        <input type="text" class="form-control" id="productName" placeholder="مثلاً: شاحن أصلي" required>
                                     </div>
                                     <div class="col-md-4">
-                                        <label class="form-label small fw-bold">الكمية</label>
-                                        <input type="number" class="form-control" id="productQty" value="1" required>
+                                        <label class="form-label small fw-bold">الكمية الأولية</label>
+                                        <input type="number" class="form-control" id="productQty" value="1" min="0" required>
                                     </div>
                                     <div class="col-md-4">
-                                        <label class="form-label small fw-bold">سعر الشراء</label>
+                                        <label class="form-label small fw-bold">سعر الشراء (التكلفة)</label>
                                         <input type="number" step="0.01" class="form-control" id="purchasePrice" placeholder="0.00" required>
                                     </div>
                                     <div class="col-md-4">
-                                        <label class="form-label small fw-bold">سعر البيع</label>
+                                        <label class="form-label small fw-bold">سعر البيع للجمهور</label>
                                         <input type="number" step="0.01" class="form-control" id="sellPrice" placeholder="0.00" required>
                                     </div>
                                 </div>
-                                <button type="submit" class="btn btn-primary w-100 mt-4 py-2 fw-bold">إضافة للمخزن</button>
+                                <button type="submit" class="btn btn-primary w-100 mt-4 py-2 fw-bold">إضافة الصنف للمخزن</button>
                             </form>
                         </div>
                     </div>
                 </div>
             </div>
 
+            <!-- تبويب الموظفين والعهد -->
             <div class="tab-pane fade" id="users-tab">
-                <div class="row">
+                <div class="row g-3">
                     <div class="col-md-4">
                         <div class="card p-4">
-                            <h5><i class="fas fa-user-plus me-2 text-info"></i> إضافة موظف</h5>
+                            <h5><i class="fas fa-user-plus me-2 text-info"></i> إضافة كاشير / موظف</h5>
                             <form id="userForm" class="mt-3">
-                                <input type="text" id="newUsername" class="form-control mb-3" placeholder="اسم المستخدم" required>
+                                <input type="text" id="newUsername" class="form-control mb-3" placeholder="اسم المستخدم" required autocomplete="off">
                                 <input type="password" id="newPassword" class="form-control mb-3" placeholder="كلمة المرور" required>
                                 <button type="submit" class="btn btn-info text-white w-100 fw-bold">إنشاء الحساب</button>
                             </form>
@@ -207,18 +212,17 @@
                     </div>
                     <div class="col-md-8">
                         <div class="card p-4">
-                            <h5><i class="fas fa-hand-holding-usd me-2 text-primary"></i> مراقبة العهدة والتصفية</h5>
+                            <h5><i class="fas fa-hand-holding-usd me-2 text-primary"></i> مراقبة وتصفية عهد الكاشير</h5>
                             <div class="table-responsive mt-3">
-                                <table class="table table-hover">
+                                <table class="table table-hover align-middle text-center mb-0">
                                     <thead class="table-dark">
                                         <tr>
                                             <th>الموظف</th>
-                                            <th>العهدة الحالية</th>
+                                            <th>إجمالي العهدة المتبقية</th>
                                             <th>الإجراء</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="employeeBalancesTable">
-                                    </tbody>
+                                    <tbody id="employeeBalancesTable"></tbody>
                                 </table>
                             </div>
                         </div>
@@ -226,22 +230,86 @@
                 </div>
             </div>
 
+            <!-- تبويب إعدادات المتجر والفاتورة -->
+            <div class="tab-pane fade" id="settings-tab">
+                <div class="card p-4">
+                    <h5 class="mb-3 text-primary"><i class="fas fa-store me-2"></i> بيانات المتجر والطباعة</h5>
+                    <form id="settingsForm">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold">طابعة الفواتير والباركود (Xprinter)</label>
+                                <select id="settingPrinterDevice" class="form-select"></select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold">عرض ورق الفواتير</label>
+                                <select id="settingReceiptWidth" class="form-select">
+        <option value="80mm">80 مم (قياسي كبير)</option>
+        <option value="58mm">58 مم (صغير)</option>
+    </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold">اسم المحل أو المؤسسة</label>
+                                <input type="text" id="settingShopName" class="form-control" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold">رقم الهاتف وخدمة العملاء</label>
+                                <input type="text" id="settingShopPhone" class="form-control">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold">ترويسة الفاتورة (Header)</label>
+                                <input type="text" id="settingReceiptHeader" class="form-control">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold">تذييل الفاتورة (Footer)</label>
+                                <input type="text" id="settingReceiptFooter" class="form-control">
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary mt-4 fw-bold px-4" id="saveSettingsBtn">
+                            <i class="fas fa-save me-1"></i> حفظ وتثبيت الإعدادات
+                        </button>
+                    </form>
+                </div>
+            </div>
+
         </div>
     </div>
 
+    <!-- نافذة تعديل المنتج المحدثة -->
     <div class="modal fade" id="editProductModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header bg-warning">
-                    <h5 class="modal-title fw-bold">تعديل المنتج</h5>
+                    <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i> تعديل بيانات الصنف</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
                     <input type="hidden" id="edit-id">
-                    <div class="mb-3"><label class="form-label">اسم المنتج</label><input type="text" id="edit-name" class="form-control"></div>
-                    <div class="mb-3"><label class="form-label">الكمية</label><input type="number" id="edit-qty" class="form-control"></div>
-                    <div class="mb-3"><label class="form-label">سعر الشراء</label><input type="number" id="edit-purchase" class="form-control"></div>
-                    <div class="mb-3"><label class="form-label">سعر البيع</label><input type="number" id="edit-sell" class="form-control"></div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">كود الباركود</label>
+                        <input type="text" id="edit-barcode" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">القسم</label>
+                        <select class="form-select" id="edit-category"></select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">اسم المنتج</label>
+                        <input type="text" id="edit-name" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">الكمية بالمخزن</label>
+                        <input type="number" id="edit-qty" class="form-control" min="0" required>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-6 mb-3">
+                            <label class="form-label small fw-bold">سعر الشراء</label>
+                            <input type="number" step="0.01" id="edit-purchase" class="form-control" required>
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label class="form-label small fw-bold">سعر البيع</label>
+                            <input type="number" step="0.01" id="edit-sell" class="form-control" required>
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
@@ -251,8 +319,6 @@
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
     <script type="module" src="./src/renderer.js"></script>
 </body>
 

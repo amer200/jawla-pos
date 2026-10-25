@@ -1,7 +1,7 @@
 {
     "name": "nezam-pos",
     "version": "1.0.0",
-    "description": "نظام جولة لإدارة المبيعات",
+    "description": "نظام جولة لإدارة المبيعات والمخازن",
     "main": "./out/main/index.js",
     "author": "Amer",
     "homepage": "https://electron-vite.org",
@@ -20,8 +20,12 @@
     "dependencies": {
         "@electron-toolkit/preload": "^3.0.2",
         "@electron-toolkit/utils": "^4.0.0",
+        "@fortawesome/fontawesome-free": "^7.3.1",
+        "bcryptjs": "^2.4.3",
         "better-sqlite3": "^12.6.2",
-        "electron-updater": "^6.3.9"
+        "bootstrap": "^5.3.8",
+        "electron-updater": "^6.3.9",
+        "jsbarcode": "^3.12.3"
     },
     "devDependencies": {
         "@electron-toolkit/eslint-config": "^2.1.0",
@@ -33,34 +37,5 @@
         "eslint": "^9.39.1",
         "prettier": "^3.7.4",
         "vite": "^7.2.6"
-    },
-    "build": {
-        "appId": "com.amer.nezampos",
-        "productName": "Nezam POS",
-        "directories": {
-            "output": "dist"
-        },
-        "files": [
-            "out/**/*",
-            "resources/**/*"
-        ],
-        "win": {
-            "target": [{
-                "target": "nsis",
-                "arch": [
-                    "x64"
-                ]
-            }]
-        },
-        "nsis": {
-            "oneClick": false,
-            "allowToChangeInstallationDirectory": true,
-            "shortcutName": "Nezam POS",
-            "createDesktopShortcut": true
-        },
-        "asar": true,
-        "asarUnpack": [
-            "**/node_modules/better-sqlite3/**/*"
-        ]
     }
 }

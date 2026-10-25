@@ -3,32 +3,38 @@ import { contextBridge, ipcRenderer } from 'electron'
 if (process.contextIsolated) {
     try {
         contextBridge.exposeInMainWorld('api', {
-            // تسجيل الدخول 
+            // --- المصادقة والتحكم بالنافذة ---
             login: (credentials) => ipcRenderer.invoke('auth:login', credentials),
-            // --- الفواتير والعهدة ---
-            getMyRecentSales: () => ipcRenderer.invoke('get-my-recent-sales'), // الفاصلة دي كانت ناقصة
+            closeApp: () => ipcRenderer.send('app:close'),
 
             // --- المخزن والأقسام ---
-            addCategory: (name) => ipcRenderer.invoke('add-category', name),
             getCategories: () => ipcRenderer.invoke('get-categories'),
-            addProduct: (product) => ipcRenderer.invoke('add-product', product),
+            addCategory: (name) => ipcRenderer.invoke('add-category', name),
             getAllProducts: () => ipcRenderer.invoke('get-all-products'),
+            addProduct: (product) => ipcRenderer.invoke('add-product', product),
             updateProduct: (product) => ipcRenderer.invoke('update-product', product),
             deleteProduct: (id) => ipcRenderer.invoke('delete-product', id),
 
-            // --- الكاشير والبحث ---
+            // --- الكاشير والمبيعات ---
             searchProductsSuggestions: (query) => ipcRenderer.invoke('search-products-suggestions', query),
             completeSale: (saleData) => ipcRenderer.invoke('complete-sale', saleData),
+            getMyRecentSales: () => ipcRenderer.invoke('get-my-recent-sales'),
 
-            // --- الموظفين والعهدة ---
+            // --- الموظفين والعهد ---
             addUser: (user) => ipcRenderer.invoke('add-user', user),
             getEmployeesBalances: () => ipcRenderer.invoke('get-employees-balances'),
             settleUserSales: (id) => ipcRenderer.invoke('settle-user-sales', id),
 
+            // --- إعدادات المتجر العامة ---
+            getSettings: () => ipcRenderer.invoke('get-settings'),
+            updateSetting: (data) => ipcRenderer.invoke('update-setting', data),
+
             // --- الطباعة ---
-            printReceipt: (html) => ipcRenderer.send('print-receipt', html)
+            printReceipt: (html) => ipcRenderer.send('print-receipt', html),
+            getPrinters: () => ipcRenderer.invoke('get-printers'),
+            printReceipt: (payload) => ipcRenderer.send('print-receipt', payload),
         })
     } catch (error) {
-        console.error("❌ Preload Error:", error)
+        console.error("❌ Preload Bridge Error:", error)
     }
 }

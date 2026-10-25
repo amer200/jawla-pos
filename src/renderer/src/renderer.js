@@ -1,275 +1,505 @@
-// renderer.js - النسخة النهائية المطورة لنظام جولة
+import 'bootstrap/dist/css/bootstrap.rtl.min.css';
+import '@fortawesome/fontawesome-free/css/all.min.css';
+import * as bootstrap from 'bootstrap';
+import JsBarcode from 'jsbarcode';
+// --- 1. تعريف العناصر من الصفحة ---
+var categoryForm = document.getElementById('categoryForm');
+var productForm = document.getElementById('productForm');
+var userForm = document.getElementById('userForm');
+var productCategorySelect = document.getElementById('productCategory');
+var inventoryTable = document.getElementById('inventoryTableBody');
+var employeeBalancesTable = document.getElementById('employeeBalancesTable');
+var searchInput = document.getElementById('searchInput');
+var saveEditBtn = document.getElementById('save-edit-btn');
 
-// --- 1. تعريف العناصر ---
-const categoryForm = document.getElementById('categoryForm');
-const productForm = document.getElementById('productForm');
-const userForm = document.getElementById('userForm');
-const productCategorySelect = document.getElementById('productCategory');
-const inventoryTable = document.getElementById('inventoryTableBody');
-const employeeBalancesTable = document.getElementById('employeeBalancesTable');
-const searchInput = document.getElementById('searchInput'); // البحث
+// كروت الإحصائيات
+var totalPurchaseValueEl = document.getElementById('totalPurchaseValue');
+var totalExpectedProfitEl = document.getElementById('totalExpectedProfit');
+var totalItemsCountEl = document.getElementById('totalItemsCount');
 
-// مودال التعديل
-const editProductModalEl = document.getElementById('editProductModal');
-const editModal = editProductModalEl ? new bootstrap.Modal(editProductModalEl) : null;
-const saveEditBtn = document.getElementById('save-edit-btn');
+// مصفوفة حفظ المنتجات
+var allProducts = [];
 
-// الإحصائيات
-const totalPurchaseValueEl = document.getElementById('totalPurchaseValue');
-const totalExpectedProfitEl = document.getElementById('totalExpectedProfit');
-const totalItemsCountEl = document.getElementById('totalItemsCount');
+// --- 2. تشغيل التبويبات (Tabs) بدون الاعتماد على أي مكتبة خارجية ---
+function setupTabs() {
+    var tabButtons = document.querySelectorAll('#adminTabs button');
+    for (var i = 0; i < tabButtons.length; i++) {
+        tabButtons[i].addEventListener('click', function(e) {
+            e.preventDefault();
+            var targetId = this.getAttribute('data-bs-target');
+            if (!targetId) return;
 
-// متغير لحفظ المنتجات مؤقتاً لعملية البحث السريع
-let allProducts = [];
+            // إزالة التفعيل من جميع الأزرار وتفعيل الزر المضغوط
+            for (var j = 0; j < tabButtons.length; j++) {
+                tabButtons[j].classList.remove('active');
+            }
+            this.classList.add('active');
 
-// --- ٢. وظائف جلب البيانات ---
+            // إخفاء كل الصفحات وإظهار الصفحة المطلوبة
+            var panes = document.querySelectorAll('.tab-content .tab-pane');
+            for (var k = 0; k < panes.length; k++) {
+                panes[k].classList.remove('show', 'active');
+            }
+            var targetPane = document.querySelector(targetId);
+            if (targetPane) {
+                targetPane.classList.add('show', 'active');
+            }
+        });
+    }
+}
+
+// --- 3. نافذة التعديل (Modal) بشكل محلي مستقل ---
+function setupModal() {
+    document.addEventListener('click', function(e) {
+        var dismissBtn = e.target.closest('[data-bs-dismiss="modal"]');
+        if (dismissBtn) {
+            var modal = dismissBtn.closest('.modal');
+            if (modal) {
+                hideModalFallback(modal);
+            }
+        }
+    });
+}
+
+function showModalFallback(modalEl) {
+    if (!modalEl) return;
+    modalEl.style.display = 'block';
+    modalEl.classList.add('show');
+    document.body.classList.add('modal-open');
+    if (!document.getElementById('custom-modal-backdrop')) {
+        var backdrop = document.createElement('div');
+        backdrop.id = 'custom-modal-backdrop';
+        backdrop.className = 'modal-backdrop fade show';
+        document.body.appendChild(backdrop);
+    }
+}
+
+function hideModalFallback(modalEl) {
+    if (!modalEl) return;
+    modalEl.style.display = 'none';
+    modalEl.classList.remove('show');
+    document.body.classList.remove('modal-open');
+    var backdrop = document.getElementById('custom-modal-backdrop');
+    if (backdrop) {
+        backdrop.remove();
+    }
+}
+
+// --- 4. تحميل الأقسام والمخزن والموظفين ---
 
 async function loadCategories() {
     try {
-        const categories = await window.api.getCategories();
-        if (productCategorySelect) {
-            productCategorySelect.innerHTML = categories.map(c =>
-                `<option value="${c.id}">${c.name}</option>`
-            ).join('');
+        var categories = await window.api.getCategories();
+        if (productCategorySelect && categories) {
+            var optionsHtml = '';
+            for (var i = 0; i < categories.length; i++) {
+                var c = categories[i];
+                optionsHtml += '<option value="' + c.id + '">' + c.name + '</option>';
+            }
+            productCategorySelect.innerHTML = optionsHtml;
         }
-    } catch (err) { console.error("❌ خطأ تحميل الأقسام:", err); }
+    } catch (err) {
+        console.error("خطأ تحميل الأقسام:", err);
+    }
 }
 
 async function loadInventory() {
     try {
-        allProducts = await window.api.getAllProducts();
+        var products = await window.api.getAllProducts();
+        allProducts = products || [];
         renderTable(allProducts);
         updateStats(allProducts);
-    } catch (err) { console.error("❌ خطأ تحميل المخزن:", err); }
+    } catch (err) {
+        console.error("خطأ تحميل المخزن:", err);
+    }
 }
 
-// دالة رسم الجدول (فصلناها عشان نستخدمها في البحث)
 function renderTable(products) {
     if (!inventoryTable) return;
-    inventoryTable.innerHTML = products.map(p => `
-        <tr>
-            <td><small class="text-muted">${p.barcode}</small></td>
-            <td><span class="badge bg-info text-dark">${p.category_name || 'عام'}</span></td>
-            <td class="fw-bold">${p.name}</td>
-            <td><span class="badge ${p.qty < 5 ? 'bg-danger' : 'bg-light text-dark'}">${p.qty}</span></td>
-            <td>${Number(p.purchase_price).toFixed(2)}</td>
-            <td>${Number(p.sell_price).toFixed(2)}</td>
-            <td class="text-success fw-bold">${(p.sell_price - p.purchase_price).toFixed(2)}</td>
-            <td>
-                <button class="btn btn-sm btn-warning" onclick="openEditModal(${JSON.stringify(p).replace(/"/g, '&quot;')})">
-                    <i class="fas fa-edit"></i>
-                </button>
-                <button class="btn btn-sm btn-danger" onclick="handleDelete(${p.id})">
-                    <i class="fas fa-trash"></i>
-                </button>
-                <button class="btn btn-sm btn-dark" onclick="printBarcodeLabel('${p.barcode}', '${p.name}', ${p.sell_price})">
-                    <i class="fas fa-print"></i>
-                </button>
-            </td>
-        </tr>
-    `).join('');
+
+    if (!products || products.length === 0) {
+        inventoryTable.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">لا توجد منتجات مسجلة في المخزن</td></tr>';
+        return;
+    }
+
+    var rowsHtml = '';
+    for (var i = 0; i < products.length; i++) {
+        var p = products[i];
+        var barcode = p.barcode ? p.barcode : '—';
+        var catName = p.category_name ? p.category_name : 'عام';
+        var buyPrice = Number(p.purchase_price) || 0;
+        var sellPrice = Number(p.sell_price) || 0;
+        var profit = (sellPrice - buyPrice).toFixed(2);
+        var qty = Number(p.qty) || 0;
+        var badgeClass = qty < 5 ? 'bg-danger' : 'bg-light text-dark';
+
+        rowsHtml += '<tr>';
+        rowsHtml += '<td><small class="text-muted">' + barcode + '</small></td>';
+        rowsHtml += '<td><span class="badge bg-info text-dark">' + catName + '</span></td>';
+        rowsHtml += '<td class="fw-bold">' + p.name + '</td>';
+        rowsHtml += '<td><span class="badge ' + badgeClass + '">' + qty + '</span></td>';
+        rowsHtml += '<td>' + buyPrice.toFixed(2) + '</td>';
+        rowsHtml += '<td>' + sellPrice.toFixed(2) + '</td>';
+        rowsHtml += '<td class="text-success fw-bold">' + profit + '</td>';
+        rowsHtml += '<td>';
+        rowsHtml += '<button class="btn btn-sm btn-warning me-1" onclick="openEditModalById(' + p.id + ')"><i class="fas fa-edit"></i></button>';
+        rowsHtml += '<button class="btn btn-sm btn-danger me-1" onclick="handleDelete(' + p.id + ')"><i class="fas fa-trash"></i></button>';
+        rowsHtml += '<button class="btn btn-sm btn-dark" onclick="printBarcodeLabelById(' + p.id + ')"><i class="fas fa-print"></i></button>';
+        rowsHtml += '</td>';
+        rowsHtml += '</tr>';
+    }
+
+    inventoryTable.innerHTML = rowsHtml;
 }
 
 async function loadEmployees() {
     try {
-        const balances = await window.api.getEmployeesBalances();
-        if (employeeBalancesTable) {
-            employeeBalancesTable.innerHTML = balances.map(b => `
-                <tr>
-                    <td>${b.username}</td>
-                    <td class="fw-bold text-primary">${(b.currentBalance || 0).toFixed(2)} ج.م</td>
-                    <td>
-                        <button class="btn btn-sm btn-success" onclick="handleSettle(${b.id})">تصفية العهدة</button>
-                    </td>
-                </tr>
-            `).join('');
+        var balances = await window.api.getEmployeesBalances();
+        if (employeeBalancesTable && balances) {
+            if (balances.length === 0) {
+                employeeBalancesTable.innerHTML = '<tr><td colspan="3" class="text-muted py-3 text-center">لا يوجد موظفين مسجلين</td></tr>';
+                return;
+            }
+            var rowsHtml = '';
+            for (var i = 0; i < balances.length; i++) {
+                var b = balances[i];
+                var bal = Number(b.currentBalance) || 0;
+                rowsHtml += '<tr>';
+                rowsHtml += '<td>' + b.username + '</td>';
+                rowsHtml += '<td class="fw-bold text-primary">' + bal.toFixed(2) + ' ج.م</td>';
+                rowsHtml += '<td>';
+                rowsHtml += '<button class="btn btn-sm btn-success" onclick="handleSettle(' + b.id + ')">تصفية العهدة</button>';
+                rowsHtml += '</td>';
+                rowsHtml += '</tr>';
+            }
+            employeeBalancesTable.innerHTML = rowsHtml;
         }
-    } catch (err) { console.error("❌ خطأ تحميل الموظفين:", err); }
+    } catch (err) {
+        console.error("خطأ تحميل الموظفين:", err);
+    }
 }
 
 function updateStats(products) {
-    let totalP = 0,
-        totalPr = 0;
-    products.forEach(p => {
-        totalP += (p.purchase_price * p.qty);
-        totalPr += ((p.sell_price - p.purchase_price) * p.qty);
-    });
-    if (totalPurchaseValueEl) totalPurchaseValueEl.innerText = totalP.toFixed(2) + ' ج.م';
-    if (totalExpectedProfitEl) totalExpectedProfitEl.innerText = totalPr.toFixed(2) + ' ج.م';
+    if (!products) return;
+    var totalPurchase = 0;
+    var totalProfit = 0;
+
+    for (var i = 0; i < products.length; i++) {
+        var p = products[i];
+        var qty = Number(p.qty) || 0;
+        var buy = Number(p.purchase_price) || 0;
+        var sell = Number(p.sell_price) || 0;
+        totalPurchase = totalPurchase + (buy * qty);
+        totalProfit = totalProfit + ((sell - buy) * qty);
+    }
+
+    if (totalPurchaseValueEl) totalPurchaseValueEl.innerText = totalPurchase.toFixed(2) + ' ج.م';
+    if (totalExpectedProfitEl) totalExpectedProfitEl.innerText = totalProfit.toFixed(2) + ' ج.م';
     if (totalItemsCountEl) totalItemsCountEl.innerText = products.length;
 }
 
-// --- ٣. البحث الذكي ---
+// --- 5. البحث السريع ---
 if (searchInput) {
-    searchInput.addEventListener('input', (e) => {
-        const term = e.target.value.toLowerCase();
-        const filtered = allProducts.filter(p =>
-            p.name.toLowerCase().includes(term) ||
-            p.barcode.toLowerCase().includes(term)
-        );
+    searchInput.addEventListener('input', function(e) {
+        var term = e.target.value.toLowerCase().trim();
+        var filtered = [];
+        for (var i = 0; i < allProducts.length; i++) {
+            var item = allProducts[i];
+            var nameMatch = item.name && item.name.toLowerCase().indexOf(term) !== -1;
+            var barcodeMatch = item.barcode && item.barcode.toLowerCase().indexOf(term) !== -1;
+            if (nameMatch || barcodeMatch) {
+                filtered.push(item);
+            }
+        }
         renderTable(filtered);
     });
 }
 
-// --- ٤. العمليات (Actions) ---
+// --- 6. التعديل والحذف والعهد ---
 
-window.openEditModal = (product) => {
-    document.getElementById('edit-id').value = product.id;
-    document.getElementById('edit-name').value = product.name;
-    document.getElementById('edit-qty').value = product.qty;
-    document.getElementById('edit-purchase').value = product.purchase_price;
-    document.getElementById('edit-sell').value = product.sell_price;
-    if (editModal) editModal.show();
+window.openEditModalById = function(id) {
+    var product = null;
+    for (var i = 0; i < allProducts.length; i++) {
+        if (allProducts[i].id == id) {
+            product = allProducts[i];
+            break;
+        }
+    }
+    if (product) {
+        window.openEditModal(product);
+    }
+};
+
+window.openEditModal = function(product) {
+    if (!product) return;
+
+    var editId = document.getElementById('edit-id');
+    var editName = document.getElementById('edit-name');
+    var editQty = document.getElementById('edit-qty');
+    var editPurchase = document.getElementById('edit-purchase');
+    var editSell = document.getElementById('edit-sell');
+
+    if (editId) editId.value = product.id;
+    if (editName) editName.value = product.name;
+    if (editQty) editQty.value = product.qty;
+    if (editPurchase) editPurchase.value = product.purchase_price;
+    if (editSell) editSell.value = product.sell_price;
+
+    var modalDom = document.getElementById('editProductModal');
+    if (modalDom) {
+        if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+            var inst = bootstrap.Modal.getInstance(modalDom);
+            if (!inst) inst = new bootstrap.Modal(modalDom);
+            inst.show();
+        } else {
+            showModalFallback(modalDom);
+        }
+    }
 };
 
 if (saveEditBtn) {
-    saveEditBtn.addEventListener('click', async() => {
-        const product = {
-            id: document.getElementById('edit-id').value,
-            name: document.getElementById('edit-name').value,
-            qty: parseInt(document.getElementById('edit-qty').value) || 0,
-            purchase_price: parseFloat(document.getElementById('edit-purchase').value) || 0,
-            sell_price: parseFloat(document.getElementById('edit-sell').value) || 0
+    saveEditBtn.addEventListener('click', async function() {
+        var editId = document.getElementById('edit-id');
+        var editName = document.getElementById('edit-name');
+        var editQty = document.getElementById('edit-qty');
+        var editPurchase = document.getElementById('edit-purchase');
+        var editSell = document.getElementById('edit-sell');
+
+        if (!editName || !editName.value.trim()) {
+            alert('يرجى كتابة اسم المنتج');
+            return;
+        }
+
+        var product = {
+            id: editId ? editId.value : '',
+            name: editName.value.trim(),
+            qty: editQty ? (parseFloat(editQty.value) || 0) : 0,
+            purchase_price: editPurchase ? (parseFloat(editPurchase.value) || 0) : 0,
+            sell_price: editSell ? (parseFloat(editSell.value) || 0) : 0
         };
 
-        // محاولة التعديل
         try {
-            const result = await window.api.updateProduct(product);
+            var result = await window.api.updateProduct(product);
             if (result && result.success) {
-                editModal.hide();
+                var modalDom = document.getElementById('editProductModal');
+                if (modalDom) {
+                    if (typeof bootstrap !== 'undefined' && bootstrap.Modal) {
+                        var inst = bootstrap.Modal.getInstance(modalDom);
+                        if (inst) inst.hide();
+                    } else {
+                        hideModalFallback(modalDom);
+                    }
+                }
                 await loadInventory();
                 alert('✅ تم التعديل بنجاح');
             } else {
-                alert('❌ فشل التعديل: تأكد من تسجيل الـ Handler في الملف الرئيسي');
+                alert('❌ فشل التعديل');
             }
         } catch (err) {
             console.error(err);
-            alert('❌ خطأ فني: Handler غير مسجل في الـ Main');
+            alert('❌ خطأ أثناء الاتصال بالنظام');
         }
     });
 }
 
-window.handleDelete = async(id) => {
+window.handleDelete = async function(id) {
     if (confirm('هل أنت متأكد من المسح النهائي؟')) {
-        const result = await window.api.deleteProduct(id);
-        if (result.success) loadInventory();
+        var result = await window.api.deleteProduct(id);
+        if (result && result.success) {
+            loadInventory();
+        }
     }
 };
 
-window.handleSettle = async(userId) => {
+window.handleSettle = async function(userId) {
     if (confirm('هل تريد تصفية عهدة الموظف؟')) {
-        const result = await window.api.settleUserSales(userId);
-        if (result.success) loadEmployees();
+        var result = await window.api.settleUserSales(userId);
+        if (result && result.success) {
+            loadEmployees();
+        }
     }
 };
 
-// --- ٥. الإضافات ---
+// --- 7. نماذج الإضافة (أقسام، منتجات، موظفين) ---
 
 if (categoryForm) {
-    categoryForm.addEventListener('submit', async(e) => {
+    categoryForm.addEventListener('submit', async function(e) {
         e.preventDefault();
-        const nameInput = document.getElementById('categoryName');
-        if (!nameInput.value) return;
-        const result = await window.api.addCategory(nameInput.value);
-        if (result.success) {
+        var nameInput = document.getElementById('categoryName');
+        if (!nameInput || !nameInput.value.trim()) return;
+
+        var result = await window.api.addCategory(nameInput.value.trim());
+        if (result && result.success) {
             nameInput.value = '';
-            loadCategories();
-            alert('✅ تم إضافة القسم');
+            await loadCategories();
+            alert('✅ تم إضافة القسم بنجاح');
+        } else {
+            alert('❌ فشل إضافة القسم: قد يكون مكرراً');
         }
     });
 }
 
 if (productForm) {
-    productForm.addEventListener('submit', async(e) => {
+    productForm.addEventListener('submit', async function(e) {
         e.preventDefault();
-        const product = {
-            barcode: document.getElementById('productBarcode').value,
-            category_id: document.getElementById('productCategory').value,
-            name: document.getElementById('productName').value,
-            qty: parseInt(document.getElementById('productQty').value) || 0,
-            purchase_price: parseFloat(document.getElementById('purchasePrice').value) || 0,
-            sell_price: parseFloat(document.getElementById('sellPrice').value) || 0
+        var barcodeInput = document.getElementById('productBarcode');
+        var catSelect = document.getElementById('productCategory');
+        var nameInput = document.getElementById('productName');
+        var qtyInput = document.getElementById('productQty');
+        var purchaseInput = document.getElementById('purchasePrice');
+        var sellInput = document.getElementById('sellPrice');
+
+        if (!nameInput || !nameInput.value.trim()) {
+            alert('يرجى كتابة اسم المنتج');
+            return;
+        }
+
+        var product = {
+            barcode: barcodeInput ? barcodeInput.value.trim() : '',
+            category_id: catSelect ? catSelect.value : '',
+            name: nameInput.value.trim(),
+            qty: qtyInput ? (parseFloat(qtyInput.value) || 0) : 0,
+            purchase_price: purchaseInput ? (parseFloat(purchaseInput.value) || 0) : 0,
+            sell_price: sellInput ? (parseFloat(sellInput.value) || 0) : 0
         };
-        const result = await window.api.addProduct(product);
-        if (result.success) {
+
+        var result = await window.api.addProduct(product);
+        if (result && result.success) {
             productForm.reset();
-            document.getElementById('barcodeContainer').style.display = 'none';
-            loadInventory();
-            alert('✅ تم إضافة المنتج');
+            var container = document.getElementById('barcodeContainer');
+            if (container) container.style.display = 'none';
+            await loadInventory();
+            alert('✅ تم إضافة المنتج بنجاح');
+        } else {
+            alert('❌ فشل إضافة المنتج: قد يكون الباركود مستخدماً');
         }
     });
 }
-// إضافة موظف جديد
+
 if (userForm) {
-    userForm.addEventListener('submit', async(e) => {
-        e.preventDefault(); // ده السطر السحري اللي بيمنع الـ Refresh
+    userForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var usernameInput = document.getElementById('newUsername');
+        var passwordInput = document.getElementById('newPassword');
 
-        const usernameInput = document.getElementById('newUsername');
-        const passwordInput = document.getElementById('newPassword');
+        if (!usernameInput || !passwordInput) return;
 
-        const userData = {
-            username: usernameInput.value,
+        var userData = {
+            username: usernameInput.value.trim(),
             password: passwordInput.value
         };
 
         try {
-            // بننادي الـ API اللي عرفناه في الـ Main
-            const result = await window.api.addUser(userData);
-
-            if (result.success) {
+            var result = await window.api.addUser(userData);
+            if (result && result.success) {
                 alert('✅ تم إضافة الموظف بنجاح');
-                userForm.reset(); // بنفضي الحقول
-                await loadEmployees(); // بنحدث جدول الموظفين عشان يظهر الجديد
+                userForm.reset();
+                await loadEmployees();
             } else {
-                alert('❌ فشل إضافة الموظف: ممكن يكون الاسم موجود قبل كدة');
+                alert('❌ فشل إضافة الموظف: قد يكون الاسم مسجلاً من قبل');
             }
         } catch (err) {
-            console.error("❌ خطأ في إضافة الموظف:", err);
-            alert('❌ حصل خطأ فني، راجع الـ Console');
+            console.error("خطأ إضافة موظف:", err);
+            alert('❌ حدث خطأ فني أثناء إضافة الموظف');
         }
     });
 }
-// --- ٦. الباركود والطباعة ---
 
-const genBarcodeBtn = document.getElementById('genBarcodeBtn');
+// --- 8. توليد وطباعة الباركود ---
+
+var genBarcodeBtn = document.getElementById('genBarcodeBtn');
 if (genBarcodeBtn) {
-    genBarcodeBtn.addEventListener('click', () => {
-        const code = '622' + Math.floor(Math.random() * 9000000000 + 1000000000);
-        document.getElementById('productBarcode').value = code;
-        document.getElementById('barcodeContainer').style.display = 'block';
-        JsBarcode("#barcodePreview", code, { format: "CODE128", width: 2, height: 40 });
+    genBarcodeBtn.addEventListener('click', function() {
+        var code = '622' + Math.floor(Math.random() * 9000000000 + 1000000000);
+        var barcodeInput = document.getElementById('productBarcode');
+        var container = document.getElementById('barcodeContainer');
+
+        if (barcodeInput) barcodeInput.value = code;
+        if (container) container.style.display = 'block';
+
+        if (typeof JsBarcode !== 'undefined') {
+            JsBarcode("#barcodePreview", code, {
+                format: "CODE128",
+                width: 2,
+                height: 40
+            });
+        }
     });
 }
 
-window.printBarcodeLabel = (barcode, name, price) => {
-    const canvas = document.createElement('canvas');
+window.printBarcodeLabelById = function(id) {
+    var product = null;
+    for (var i = 0; i < allProducts.length; i++) {
+        if (allProducts[i].id == id) {
+            product = allProducts[i];
+            break;
+        }
+    }
+    if (product) {
+        window.printBarcodeLabel(product.barcode, product.name, product.sell_price);
+    }
+};
+
+window.printBarcodeLabel = function(barcode, name, price) {
+    if (!barcode) {
+        alert("⚠️ هذا المنتج لا يحتوي على باركود لطباعته");
+        return;
+    }
+
+    if (typeof JsBarcode === 'undefined') {
+        alert("مكتبة توليد الباركود غير محملة");
+        return;
+    }
+
+    var canvas = document.createElement('canvas');
     try {
         JsBarcode(canvas, barcode, {
             format: "CODE128",
-            width: 2,
-            height: 80,
+            width: 1.8,
+            height: 45,
             displayValue: true,
-            fontSize: 20
+            fontSize: 12,
+            margin: 0
         });
-        const barcodeImg = canvas.toDataURL("image/png");
-        const labelHtml = `
-            <div style="width: 38mm; text-align: center; font-family: Arial; padding: 5px; direction: rtl;">
-                <div style="font-size: 14px; font-weight: bold; margin-bottom: 5px;">نظام جولة</div>
-                <div style="font-size: 12px; margin-bottom: 5px;">${name}</div>
-                <img src="${barcodeImg}" style="width: 100%; max-height: 50px;" />
-                <div style="font-size: 14px; font-weight: bold; margin-top: 5px;">السعر: ${price} ج.م</div>
-            </div>
-        `;
+
+        var barcodeImg = canvas.toDataURL("image/png");
+        var displayPrice = Number(price) || 0;
+
+        var labelHtml = '<!DOCTYPE html>' +
+            '<html lang="ar" dir="rtl">' +
+            '<head>' +
+            '<meta charset="UTF-8">' +
+            '<style>' +
+            '@page { size: 38mm 25mm; margin: 0; }' +
+            '* { box-sizing: border-box; margin: 0; padding: 0; }' +
+            'body { width: 38mm; height: 25mm; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; align-items: center; font-family: Arial, sans-serif; padding: 2mm; background: #fff; color: #000; text-align: center; }' +
+            '.shop-title { font-size: 9px; font-weight: bold; line-height: 1; }' +
+            '.prod-name { font-size: 8px; font-weight: bold; line-height: 1; max-width: 34mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }' +
+            '.barcode-box img { width: 32mm; max-height: 12mm; }' +
+            '.prod-price { font-size: 9px; font-weight: bold; line-height: 1; }' +
+            '</style>' +
+            '</head>' +
+            '<body>' +
+            '<div class="shop-title">نظام جولة</div>' +
+            '<div class="prod-name">' + name + '</div>' +
+            '<div class="barcode-box"><img src="' + barcodeImg + '" /></div>' +
+            '<div class="prod-price">السعر: ' + displayPrice.toFixed(2) + ' ج.م</div>' +
+            '</body>' +
+            '</html>';
+
         window.api.printReceipt(labelHtml);
     } catch (err) {
+        console.error(err);
         alert("مشكلة في توليد الباركود");
     }
 };
 
-// --- ٧. التشغيل ---
+// --- 9. بدء التشغيل التلقائي ---
 
 async function init() {
     console.log("🚀 Initializing Nizam Jawla Admin...");
+    setupTabs();
+    setupModal();
     if (window.api) {
         await loadCategories();
         await loadInventory();

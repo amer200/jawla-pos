@@ -1,0 +1,1919 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+resources/
+  icon.png
+src/
+  main/
+    database.js
+    index.js
+  preload/
+    index.js
+  renderer/
+    assets/
+      base.css
+      electron.svg
+      main.css
+      wavy-lines.svg
+    src/
+      admin.js
+      cashier-renderer.js
+      renderer.js
+    cashier.html
+    index.html
+    login.html
+.gitignore
+dev-app-update.yml
+electron-builder.yml
+electron.vite.config.mjs
+eslint.config.mjs
+package.json
+README.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="src/main/database.js">
+import Database from 'better-sqlite3'
+import path from 'path'
+import { app } from 'electron'
+
+const dbPath = path.join(app.getPath('userData'), 'nezam-pos.db')
+export const db = new Database(dbPath)
+
+export const initDB = () => {
+    // 1. جدول المستخدمين
+    db.prepare(`
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password TEXT NOT NULL,
+            role TEXT CHECK( role IN ('admin', 'employee') ) DEFAULT 'employee'
+        )
+    `).run();
+
+    const userCount = db.prepare('SELECT count(*) as count FROM users').get();
+    if (userCount.count === 0) {
+        db.prepare("INSERT INTO users (username, password, role) VALUES ('admin', 'admin123', 'admin')").run();
+    }
+
+    // 2. جدول الأقسام
+    db.prepare(`
+        CREATE TABLE IF NOT EXISTS categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        )
+    `).run()
+
+    // 3. جدول المنتجات
+    db.prepare(`
+        CREATE TABLE IF NOT EXISTS products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            barcode TEXT UNIQUE, 
+            name TEXT NOT NULL,
+            category_id INTEGER,
+            qty REAL DEFAULT 0 CHECK(qty >= 0),
+            purchase_price REAL DEFAULT 0,
+            sell_price REAL DEFAULT 0,
+            FOREIGN KEY(category_id) REFERENCES categories(id)
+        )
+    `).run()
+
+    // 4. جدول المبيعات (تم تحديثه ليشمل الموظف وحالة التصفية)
+    db.prepare(`
+        CREATE TABLE IF NOT EXISTS sales (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            total_amount REAL NOT NULL,
+            sale_date TEXT NOT NULL,
+            user_id INTEGER,
+            is_settled INTEGER DEFAULT 0, -- 0 = في العهدة، 1 = تم التصفير
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    `).run();
+
+    // 5. جدول تفاصيل المبيعات
+    db.prepare(`
+        CREATE TABLE IF NOT EXISTS sale_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sale_id INTEGER,
+            product_id INTEGER,
+            qty REAL NOT NULL,
+            price REAL NOT NULL,
+            FOREIGN KEY(sale_id) REFERENCES sales(id),
+            FOREIGN KEY(product_id) REFERENCES products(id)
+        )
+    `).run();
+
+    // 🛡️ جسر التحديث (Migrations) 
+    // السطور دي عشان لو الداتابيز قديمة عند "خالك" تتحدث تلقائي بدون مشاكل
+    try { db.prepare("ALTER TABLE products ADD COLUMN barcode TEXT UNIQUE").run(); } catch (e) {}
+    try { db.prepare("ALTER TABLE sales ADD COLUMN user_id INTEGER").run(); } catch (e) {}
+    try { db.prepare("ALTER TABLE sales ADD COLUMN is_settled INTEGER DEFAULT 0").run(); } catch (e) {}
+
+    console.log('✅ Database System Ready at:', dbPath)
+}
+</file>
+
+<file path="src/main/index.js">
+import { app, BrowserWindow, ipcMain } from 'electron'
+import { join } from 'path'
+import { is } from '@electron-toolkit/utils'
+import { db, initDB } from './database'
+
+let loginWindow = null,
+    adminWindow = null,
+    cashierWindow = null;
+let currentSessionUser = null;
+
+// دالة تحميل المسارات مع مراعاة Linux Case Sensitivity
+function loadWindowRoute(window, route) {
+    const fileName = (route === 'admin') ? 'index.html' : `${route.replace('/', '')}.html`;
+    if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+        const devPath = (route === 'admin') ? '' : route;
+        window.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/${devPath}`);
+    } else {
+        window.loadFile(join(__dirname, `../renderer/${fileName}`));
+    }
+}
+
+function createLoginWindow() {
+    loginWindow = new BrowserWindow({
+        width: 450,
+        height: 600,
+        resizable: false,
+        frame: false,
+        webPreferences: {
+            preload: join(__dirname, '../preload/index.js'),
+            sandbox: false,
+            contextIsolation: true // تأكد إنها true لزيادة الأمان
+        }
+    });
+    loadWindowRoute(loginWindow, 'login');
+}
+
+function createAdminWindow() {
+    adminWindow = new BrowserWindow({
+        width: 1280,
+        height: 800,
+        webPreferences: { preload: join(__dirname, '../preload/index.js'), sandbox: false }
+    });
+    loadWindowRoute(adminWindow, 'admin');
+}
+
+function createCashierWindow() {
+    cashierWindow = new BrowserWindow({
+        width: 1366,
+        height: 800,
+        webPreferences: { preload: join(__dirname, '../preload/index.js'), sandbox: false }
+    });
+    loadWindowRoute(cashierWindow, 'cashier');
+}
+
+app.whenReady().then(() => {
+    // تهيئة قاعدة البيانات
+    initDB();
+
+    // --- الهاندلر المصلح: تغيير الاسم من login-attempt لـ auth:login ---
+    ipcMain.handle('auth:login', async(event, { username, password }) => {
+        try {
+            const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password);
+            if (user) {
+                currentSessionUser = user;
+                // فتح النافذة بناءً على الصلاحية
+                if (user.role === 'admin') {
+                    createAdminWindow();
+                } else {
+                    createCashierWindow();
+                }
+                // إغلاق نافذة اللوجين بعد وقت قصير لضمان سلاسة الانتقال
+                setTimeout(() => { if (loginWindow) loginWindow.close(); }, 500);
+                return { success: true, role: user.role };
+            }
+            return { success: false, message: "بيانات الدخول غير صحيحة" };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    });
+
+    // --- باقي الـ Handlers ---
+    ipcMain.handle('get-categories', () => db.prepare('SELECT * FROM categories').all());
+
+    ipcMain.handle('get-all-products', () => {
+        return db.prepare('SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id').all();
+    });
+
+    ipcMain.handle('add-category', (e, name) => {
+        try {
+            db.prepare('INSERT INTO categories (name) VALUES (?)').run(name);
+            return { success: true };
+        } catch (err) { return { success: false, error: err.message }; }
+    });
+
+    ipcMain.handle('add-product', (e, p) => {
+        try {
+            db.prepare('INSERT INTO products (barcode, name, category_id, qty, purchase_price, sell_price) VALUES (?,?,?,?,?,?)')
+                .run(p.barcode, p.name, p.category_id, p.qty, p.purchase_price, p.sell_price);
+            return { success: true };
+        } catch (err) { return { success: false, error: err.message }; }
+    });
+
+    ipcMain.handle('update-product', (e, p) => {
+        try {
+            db.prepare('UPDATE products SET name=?, qty=?, purchase_price=?, sell_price=? WHERE id=?')
+                .run(p.name, p.qty, p.purchase_price, p.sell_price, p.id);
+            return { success: true };
+        } catch (err) { return { success: false }; }
+    });
+
+    ipcMain.handle('delete-product', (e, id) => {
+        try {
+            db.prepare('DELETE FROM products WHERE id = ?').run(id);
+            return { success: true };
+        } catch (err) { return { success: false }; }
+    });
+
+    ipcMain.handle('get-my-recent-sales', () => {
+        try {
+            if (!currentSessionUser) return [];
+            return db.prepare(`
+          SELECT id, total_amount, sale_date 
+          FROM sales 
+          WHERE user_id = ? AND is_settled = 0 
+          ORDER BY id DESC
+      `).all(currentSessionUser.id);
+        } catch (err) { return []; }
+    });
+
+    ipcMain.handle('search-products-suggestions', (event, query) => {
+        if (!query) return [];
+        return db.prepare('SELECT * FROM products WHERE name LIKE ? OR barcode LIKE ? LIMIT 10').all(`%${query}%`, `%${query}%`);
+    });
+
+    ipcMain.handle('complete-sale', (event, saleData) => {
+        try {
+            const transaction = db.transaction((data) => {
+                const stmtSale = db.prepare('INSERT INTO sales (total_amount, sale_date, user_id, is_settled) VALUES (?, ?, ?, 0)');
+                const info = stmtSale.run(data.total, data.date, currentSessionUser.id);
+                const lastId = info.lastInsertRowid;
+                const updateProd = db.prepare('UPDATE products SET qty = qty - ? WHERE id = ?');
+                const insertItem = db.prepare('INSERT INTO sale_items (sale_id, product_id, qty, price) VALUES (?, ?, ?, ?)');
+                for (const item of data.items) {
+                    updateProd.run(item.qty, item.id);
+                    insertItem.run(lastId, item.id, item.qty, item.price);
+                }
+            });
+            transaction(saleData);
+            return { success: true };
+        } catch (e) { return { success: false, message: e.message }; }
+    });
+
+    ipcMain.handle('add-user', (e, u) => {
+        try {
+            db.prepare('INSERT INTO users (username, password, role) VALUES (?,?,?)').run(u.username, u.password, 'employee');
+            return { success: true };
+        } catch (err) { return { success: false }; }
+    });
+
+    ipcMain.handle('get-employees-balances', () => {
+        return db.prepare(`SELECT u.id, u.username, IFNULL(SUM(CASE WHEN s.is_settled = 0 THEN s.total_amount ELSE 0 END), 0) as currentBalance FROM users u LEFT JOIN sales s ON u.id = s.user_id WHERE u.role = 'employee' GROUP BY u.id`).all();
+    });
+
+    ipcMain.handle('settle-user-sales', (e, id) => {
+        try {
+            db.prepare('UPDATE sales SET is_settled = 1 WHERE user_id = ?').run(id);
+            return { success: true };
+        } catch (err) { return { success: false }; }
+    });
+
+    ipcMain.on('print-receipt', (event, receiptHtml) => {
+        const printWindow = new BrowserWindow({
+            show: false,
+            webPreferences: { nodeIntegration: true, contextIsolation: false }
+        });
+        const encodedData = encodeURIComponent(receiptHtml);
+        printWindow.loadURL(`data:text/html;charset=utf-8,${encodedData}`);
+        printWindow.webContents.on('did-finish-load', () => {
+            printWindow.webContents.print({
+                silent: false, // خليني صامت عشان يطبع فوراً
+                printBackground: true,
+                color: false,
+                margin: { marginType: 'none' }
+            }, () => {
+                printWindow.close();
+            });
+        });
+    });
+
+    createLoginWindow();
+});
+
+app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+});
+</file>
+
+<file path="src/preload/index.js">
+import { contextBridge, ipcRenderer } from 'electron'
+
+if (process.contextIsolated) {
+    try {
+        contextBridge.exposeInMainWorld('api', {
+            // تسجيل الدخول 
+            login: (credentials) => ipcRenderer.invoke('auth:login', credentials),
+            // --- الفواتير والعهدة ---
+            getMyRecentSales: () => ipcRenderer.invoke('get-my-recent-sales'), // الفاصلة دي كانت ناقصة
+
+            // --- المخزن والأقسام ---
+            addCategory: (name) => ipcRenderer.invoke('add-category', name),
+            getCategories: () => ipcRenderer.invoke('get-categories'),
+            addProduct: (product) => ipcRenderer.invoke('add-product', product),
+            getAllProducts: () => ipcRenderer.invoke('get-all-products'),
+            updateProduct: (product) => ipcRenderer.invoke('update-product', product),
+            deleteProduct: (id) => ipcRenderer.invoke('delete-product', id),
+
+            // --- الكاشير والبحث ---
+            searchProductsSuggestions: (query) => ipcRenderer.invoke('search-products-suggestions', query),
+            completeSale: (saleData) => ipcRenderer.invoke('complete-sale', saleData),
+
+            // --- الموظفين والعهدة ---
+            addUser: (user) => ipcRenderer.invoke('add-user', user),
+            getEmployeesBalances: () => ipcRenderer.invoke('get-employees-balances'),
+            settleUserSales: (id) => ipcRenderer.invoke('settle-user-sales', id),
+
+            // --- الطباعة ---
+            printReceipt: (html) => ipcRenderer.send('print-receipt', html)
+        })
+    } catch (error) {
+        console.error("❌ Preload Error:", error)
+    }
+}
+</file>
+
+<file path="src/renderer/assets/base.css">
+:root {
+  --ev-c-white: #ffffff;
+  --ev-c-white-soft: #f8f8f8;
+  --ev-c-white-mute: #f2f2f2;
+
+  --ev-c-black: #1b1b1f;
+  --ev-c-black-soft: #222222;
+  --ev-c-black-mute: #282828;
+
+  --ev-c-gray-1: #515c67;
+  --ev-c-gray-2: #414853;
+  --ev-c-gray-3: #32363f;
+
+  --ev-c-text-1: rgba(255, 255, 245, 0.86);
+  --ev-c-text-2: rgba(235, 235, 245, 0.6);
+  --ev-c-text-3: rgba(235, 235, 245, 0.38);
+
+  --ev-button-alt-border: transparent;
+  --ev-button-alt-text: var(--ev-c-text-1);
+  --ev-button-alt-bg: var(--ev-c-gray-3);
+  --ev-button-alt-hover-border: transparent;
+  --ev-button-alt-hover-text: var(--ev-c-text-1);
+  --ev-button-alt-hover-bg: var(--ev-c-gray-2);
+}
+
+:root {
+  --color-background: var(--ev-c-black);
+  --color-background-soft: var(--ev-c-black-soft);
+  --color-background-mute: var(--ev-c-black-mute);
+
+  --color-text: var(--ev-c-text-1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  font-weight: normal;
+}
+
+ul {
+  list-style: none;
+}
+
+body {
+  min-height: 100vh;
+  color: var(--color-text);
+  background: var(--color-background);
+  line-height: 1.6;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    'Fira Sans',
+    'Droid Sans',
+    'Helvetica Neue',
+    sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+</file>
+
+<file path="src/renderer/assets/electron.svg">
+<svg viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="64" cy="64" r="64" fill="#2F3242"/>
+  <ellipse cx="63.9835" cy="23.2036" rx="4.48794" ry="4.495" stroke="#A2ECFB" stroke-width="3.6" stroke-linecap="round"/>
+  <path d="M51.3954 39.5028C52.3733 39.6812 53.3108 39.033 53.4892 38.055C53.6676 37.0771 53.0194 36.1396 52.0414 35.9612L51.3954 39.5028ZM28.6153 43.5751L30.1748 44.4741L30.1748 44.4741L28.6153 43.5751ZM28.9393 60.9358C29.4332 61.7985 30.5329 62.0976 31.3957 61.6037C32.2585 61.1098 32.5575 60.0101 32.0636 59.1473L28.9393 60.9358ZM37.6935 66.7457C37.025 66.01 35.8866 65.9554 35.1508 66.6239C34.415 67.2924 34.3605 68.4308 35.029 69.1666L37.6935 66.7457ZM53.7489 81.7014L52.8478 83.2597L53.7489 81.7014ZM96.9206 89.515C97.7416 88.9544 97.9526 87.8344 97.3919 87.0135C96.8313 86.1925 95.7113 85.9815 94.8904 86.5422L96.9206 89.515ZM52.0414 35.9612C46.4712 34.9451 41.2848 34.8966 36.9738 35.9376C32.6548 36.9806 29.0841 39.1576 27.0559 42.6762L30.1748 44.4741C31.5693 42.0549 34.1448 40.3243 37.8188 39.4371C41.5009 38.5479 46.1547 38.5468 51.3954 39.5028L52.0414 35.9612ZM27.0559 42.6762C24.043 47.9029 25.2781 54.5399 28.9393 60.9358L32.0636 59.1473C28.6579 53.1977 28.1088 48.0581 30.1748 44.4741L27.0559 42.6762ZM35.029 69.1666C39.6385 74.24 45.7158 79.1355 52.8478 83.2597L54.6499 80.1432C47.8081 76.1868 42.0298 71.5185 37.6935 66.7457L35.029 69.1666ZM52.8478 83.2597C61.344 88.1726 70.0465 91.2445 77.7351 92.3608C85.359 93.4677 92.2744 92.6881 96.9206 89.515L94.8904 86.5422C91.3255 88.9767 85.4902 89.849 78.2524 88.7982C71.0793 87.7567 62.809 84.8612 54.6499 80.1432L52.8478 83.2597ZM105.359 84.9077C105.359 81.4337 102.546 78.6127 99.071 78.6127V82.2127C100.553 82.2127 101.759 83.4166 101.759 84.9077H105.359ZM99.071 78.6127C95.5956 78.6127 92.7831 81.4337 92.7831 84.9077H96.3831C96.3831 83.4166 97.5892 82.2127 99.071 82.2127V78.6127ZM92.7831 84.9077C92.7831 88.3817 95.5956 91.2027 99.071 91.2027V87.6027C97.5892 87.6027 96.3831 86.3988 96.3831 84.9077H92.7831ZM99.071 91.2027C102.546 91.2027 105.359 88.3817 105.359 84.9077H101.759C101.759 86.3988 100.553 87.6027 99.071 87.6027V91.2027Z" fill="#A2ECFB"/>
+  <path d="M91.4873 65.382C90.8456 66.1412 90.9409 67.2769 91.7002 67.9186C92.4594 68.5603 93.5951 68.465 94.2368 67.7058L91.4873 65.382ZM99.3169 43.6354L97.7574 44.5344L99.3169 43.6354ZM84.507 35.2412C83.513 35.2282 82.6967 36.0236 82.6838 37.0176C82.6708 38.0116 83.4661 38.8279 84.4602 38.8409L84.507 35.2412ZM74.9407 39.8801C75.9127 39.6716 76.5315 38.7145 76.323 37.7425C76.1144 36.7706 75.1573 36.1517 74.1854 36.3603L74.9407 39.8801ZM53.7836 46.3728L54.6847 47.931L53.7836 46.3728ZM25.5491 80.9047C25.6932 81.8883 26.6074 82.5688 27.5911 82.4247C28.5747 82.2806 29.2552 81.3664 29.1111 80.3828L25.5491 80.9047ZM94.2368 67.7058C97.8838 63.3907 100.505 58.927 101.752 54.678C103.001 50.4213 102.9 46.2472 100.876 42.7365L97.7574 44.5344C99.1494 46.9491 99.3603 50.0419 98.2974 53.6644C97.2323 57.2945 94.9184 61.3223 91.4873 65.382L94.2368 67.7058ZM100.876 42.7365C97.9119 37.5938 91.7082 35.335 84.507 35.2412L84.4602 38.8409C91.1328 38.9278 95.7262 41.0106 97.7574 44.5344L100.876 42.7365ZM74.1854 36.3603C67.4362 37.8086 60.0878 40.648 52.8826 44.8146L54.6847 47.931C61.5972 43.9338 68.5948 41.2419 74.9407 39.8801L74.1854 36.3603ZM52.8826 44.8146C44.1366 49.872 36.9669 56.0954 32.1491 62.3927C27.3774 68.63 24.7148 75.2115 25.5491 80.9047L29.1111 80.3828C28.4839 76.1026 30.4747 70.5062 35.0084 64.5802C39.496 58.7143 46.2839 52.7889 54.6847 47.931L52.8826 44.8146Z" fill="#A2ECFB"/>
+  <path d="M49.0825 87.2295C48.7478 86.2934 47.7176 85.8059 46.7816 86.1406C45.8455 86.4753 45.358 87.5055 45.6927 88.4416L49.0825 87.2295ZM78.5635 96.4256C79.075 95.5732 78.7988 94.4675 77.9464 93.9559C77.0941 93.4443 75.9884 93.7205 75.4768 94.5729L78.5635 96.4256ZM79.5703 85.1795C79.2738 86.1284 79.8027 87.1379 80.7516 87.4344C81.7004 87.7308 82.71 87.2019 83.0064 86.2531L79.5703 85.1795ZM84.3832 64.0673H82.5832H84.3832ZM69.156 22.5301C68.2477 22.1261 67.1838 22.535 66.7799 23.4433C66.3759 24.3517 66.7848 25.4155 67.6931 25.8194L69.156 22.5301ZM45.6927 88.4416C47.5994 93.7741 50.1496 98.2905 53.2032 101.505C56.2623 104.724 59.9279 106.731 63.9835 106.731V103.131C61.1984 103.131 58.4165 101.765 55.8131 99.0249C53.2042 96.279 50.8768 92.2477 49.0825 87.2295L45.6927 88.4416ZM63.9835 106.731C69.8694 106.731 74.8921 102.542 78.5635 96.4256L75.4768 94.5729C72.0781 100.235 68.0122 103.131 63.9835 103.131V106.731ZM83.0064 86.2531C85.0269 79.7864 86.1832 72.1831 86.1832 64.0673H82.5832C82.5832 71.8536 81.4723 79.0919 79.5703 85.1795L83.0064 86.2531ZM86.1832 64.0673C86.1832 54.1144 84.4439 44.922 81.4961 37.6502C78.5748 30.4436 74.3436 24.8371 69.156 22.5301L67.6931 25.8194C71.6364 27.5731 75.3846 32.1564 78.1598 39.0026C80.9086 45.7836 82.5832 54.507 82.5832 64.0673H86.1832Z" fill="#A2ECFB"/>
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M103.559 84.9077C103.559 82.4252 101.55 80.4127 99.071 80.4127C96.5924 80.4127 94.5831 82.4252 94.5831 84.9077C94.5831 87.3902 96.5924 89.4027 99.071 89.4027C101.55 89.4027 103.559 87.3902 103.559 84.9077V84.9077Z" stroke="#A2ECFB" stroke-width="3.6" stroke-linecap="round"/>
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M28.8143 89.4027C31.2929 89.4027 33.3023 87.3902 33.3023 84.9077C33.3023 82.4252 31.2929 80.4127 28.8143 80.4127C26.3357 80.4127 24.3264 82.4252 24.3264 84.9077C24.3264 87.3902 26.3357 89.4027 28.8143 89.4027V89.4027V89.4027Z" stroke="#A2ECFB" stroke-width="3.6" stroke-linecap="round"/>
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M64.8501 68.0857C62.6341 68.5652 60.451 67.1547 59.9713 64.9353C59.4934 62.7159 60.9007 60.5293 63.1167 60.0489C65.3326 59.5693 67.5157 60.9798 67.9954 63.1992C68.4742 65.4186 67.066 67.6052 64.8501 68.0857Z" fill="#A2ECFB"/>
+</svg>
+</file>
+
+<file path="src/renderer/assets/main.css">
+@import './base.css';
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background-image: url('./wavy-lines.svg');
+  background-size: cover;
+  user-select: none;
+}
+
+code {
+  font-weight: 600;
+  padding: 3px 5px;
+  border-radius: 2px;
+  background-color: var(--color-background-mute);
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    SF Mono,
+    Menlo,
+    Consolas,
+    Liberation Mono,
+    monospace;
+  font-size: 85%;
+}
+
+#app {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  margin-bottom: 80px;
+}
+
+.logo {
+  margin-bottom: 20px;
+  -webkit-user-drag: none;
+  height: 128px;
+  width: 128px;
+  will-change: filter;
+  transition: filter 300ms;
+}
+
+.logo:hover {
+  filter: drop-shadow(0 0 1.2em #6988e6aa);
+}
+
+.creator {
+  font-size: 14px;
+  line-height: 16px;
+  color: var(--ev-c-text-2);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.text {
+  font-size: 28px;
+  color: var(--ev-c-text-1);
+  font-weight: 700;
+  line-height: 32px;
+  text-align: center;
+  margin: 0 10px;
+  padding: 16px 0;
+}
+
+.tip {
+  font-size: 16px;
+  line-height: 24px;
+  color: var(--ev-c-text-2);
+  font-weight: 600;
+}
+
+.js {
+  background: -webkit-linear-gradient(315deg, #f0dc4e 40%, #f1f1f3);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 700;
+}
+
+.actions {
+  display: flex;
+  padding-top: 32px;
+  margin: -6px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.action {
+  flex-shrink: 0;
+  padding: 6px;
+}
+
+.action a {
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+  border: 1px solid transparent;
+  text-align: center;
+  font-weight: 600;
+  white-space: nowrap;
+  border-radius: 20px;
+  padding: 0 20px;
+  line-height: 38px;
+  font-size: 14px;
+  border-color: var(--ev-button-alt-border);
+  color: var(--ev-button-alt-text);
+  background-color: var(--ev-button-alt-bg);
+}
+
+.action a:hover {
+  border-color: var(--ev-button-alt-hover-border);
+  color: var(--ev-button-alt-hover-text);
+  background-color: var(--ev-button-alt-hover-bg);
+}
+
+.versions {
+  position: absolute;
+  bottom: 30px;
+  margin: 0 auto;
+  padding: 15px 0;
+  font-family: 'Menlo', 'Lucida Console', monospace;
+  display: inline-flex;
+  overflow: hidden;
+  align-items: center;
+  border-radius: 22px;
+  background-color: #202127;
+  backdrop-filter: blur(24px);
+}
+
+.versions li {
+  display: block;
+  float: left;
+  border-right: 1px solid var(--ev-c-gray-1);
+  padding: 0 20px;
+  font-size: 14px;
+  line-height: 14px;
+  opacity: 0.8;
+  &:last-child {
+    border: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .text {
+    font-size: 20px;
+  }
+}
+
+@media (max-width: 620px) {
+  .versions {
+    display: none;
+  }
+}
+
+@media (max-width: 350px) {
+  .tip,
+  .actions {
+    display: none;
+  }
+}
+</file>
+
+<file path="src/renderer/assets/wavy-lines.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1422 800" opacity="0.3">
+  <defs>
+    <linearGradient x1="50%" y1="0%" x2="50%" y2="100%" id="oooscillate-grad">
+      <stop stop-color="hsl(206, 75%, 49%)" stop-opacity="1" offset="0%"></stop>
+      <stop stop-color="hsl(331, 90%, 56%)" stop-opacity="1" offset="100%"></stop>
+    </linearGradient>
+  </defs>
+  <g stroke-width="1" stroke="url(#oooscillate-grad)" fill="none" stroke-linecap="round">
+    <path d="M 0 448 Q 355.5 -100 711 400 Q 1066.5 900 1422 448" opacity="0.05"></path>
+    <path d="M 0 420 Q 355.5 -100 711 400 Q 1066.5 900 1422 420" opacity="0.11"></path>
+    <path d="M 0 392 Q 355.5 -100 711 400 Q 1066.5 900 1422 392" opacity="0.18"></path>
+    <path d="M 0 364 Q 355.5 -100 711 400 Q 1066.5 900 1422 364" opacity="0.24"></path>
+    <path d="M 0 336 Q 355.5 -100 711 400 Q 1066.5 900 1422 336" opacity="0.30"></path>
+    <path d="M 0 308 Q 355.5 -100 711 400 Q 1066.5 900 1422 308" opacity="0.37"></path>
+    <path d="M 0 280 Q 355.5 -100 711 400 Q 1066.5 900 1422 280" opacity="0.43"></path>
+    <path d="M 0 252 Q 355.5 -100 711 400 Q 1066.5 900 1422 252" opacity="0.49"></path>
+    <path d="M 0 224 Q 355.5 -100 711 400 Q 1066.5 900 1422 224" opacity="0.56"></path>
+    <path d="M 0 196 Q 355.5 -100 711 400 Q 1066.5 900 1422 196" opacity="0.62"></path>
+    <path d="M 0 168 Q 355.5 -100 711 400 Q 1066.5 900 1422 168" opacity="0.68"></path>
+    <path d="M 0 140 Q 355.5 -100 711 400 Q 1066.5 900 1422 140" opacity="0.75"></path>
+    <path d="M 0 112 Q 355.5 -100 711 400 Q 1066.5 900 1422 112" opacity="0.81"></path>
+    <path d="M 0 84 Q 355.5 -100 711 400 Q 1066.5 900 1422 84" opacity="0.87"></path>
+    <path d="M 0 56 Q 355.5 -100 711 400 Q 1066.5 900 1422 56" opacity="0.94"></path>
+  </g>
+</svg>
+</file>
+
+<file path="src/renderer/src/admin.js">
+window.printBarcodeLabel = (code, name) => {
+    const printWindow = window.open('', '_blank', 'width=300,height=200');
+    printWindow.document.write(`
+        <html>
+            <head><title>Print Label</title></head>
+            <body style="text-align:center; font-family: sans-serif; padding: 10px;">
+                <div style="font-size: 12px; font-weight: bold;">${name}</div>
+                <svg id="print-svg"></svg>
+                <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+                <script>
+                    JsBarcode("#print-svg", "${code}", {
+                        format: "CODE128",
+                        width: 1.5,
+                        height: 40
+                    });
+                    setTimeout(() => { window.print(); window.close(); }, 500);
+                </script>
+            </body>
+        </html>
+    `);
+    printWindow.document.close();
+};
+</file>
+
+<file path="src/renderer/src/cashier-renderer.js">
+// cashier-renderer.js
+let currentBill = [];
+
+// --- وظيفة توليد شكل الفاتورة للطباعة ---
+function generateReceiptHTML(saleData) {
+    const itemsHtml = saleData.items.map(item => `
+        <tr>
+            <td style="padding: 5px 0;">${item.name}</td>
+            <td style="padding: 5px; text-align: center;">${item.qty}</td>
+            <td style="padding: 5px; text-align: left;">${(item.price * item.qty).toFixed(2)}</td>
+        </tr>
+    `).join('');
+
+    return `
+        <div style="width: 80mm; font-family: 'Segoe UI', Tahoma, sans-serif; direction: rtl; padding: 10px; color: #000; background: #fff;">
+            <div style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 10px;">
+                <h2 style="margin: 0; font-size: 24px; text-transform: uppercase;"> جوجو</h2>
+                <p style="margin: 5px 0 0; font-size: 14px; font-weight: bold;">فاتورة بيع</p>
+            </div>
+
+            <div style="font-size: 12px; margin-bottom: 10px;">
+                <span>التاريخ: ${new Date().toLocaleString('ar-EG')}</span>
+            </div>
+
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 10px;">
+                <thead>
+                    <tr style="border-bottom: 1px dashed #000;">
+                        <th style="text-align: right; padding: 5px 0;">الصنف</th>
+                        <th style="text-align: center;">كمية</th>
+                        <th style="text-align: left;">السعر</th>
+                    </tr>
+                </thead>
+                <tbody>${itemsHtml}</tbody>
+            </table>
+
+            <div style="border-top: 1px solid #000; padding-top: 10px; margin-bottom: 20px;">
+                <h3 style="display: flex; justify-content: space-between; margin: 0; font-size: 18px;">
+                    <span>الإجمالي النهائي:</span>
+                    <span>${saleData.total.toFixed(2)} ج.م</span>
+                </h3>
+            </div>
+
+            <div style="text-align: center; border-top: 1px dashed #000; pt: 10px; font-size: 12px;">
+                <p style="margin: 10px 0 5px; font-weight: bold;">شكراً لزيارتكم!</p>
+                <p style="margin: 0;">بواسطة: <strong>نظام جولة</strong></p>
+                <p style="margin: 5px 0 0; font-family: monospace; font-size: 14px;">📞 ${"01152306375"}</p>
+            </div>
+        </div>
+    `;
+}
+
+// --- ١. وظيفة عرض الفواتير الأخيرة (العهدة) ---
+async function loadRecentSales() {
+    const tableBody = document.getElementById('myRecentSalesTable');
+    const shiftTotalEl = document.getElementById('myShiftTotal');
+
+    try {
+        const sales = await window.api.getMyRecentSales();
+        let total = 0;
+
+        tableBody.innerHTML = sales.map(s => {
+            total += s.total_amount;
+            const time = new Date(s.sale_date).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+            return `<tr><td>#${s.id}</td><td>${time}</td><td class="fw-bold">${s.total_amount.toFixed(2)}</td></tr>`;
+        }).join('');
+
+        shiftTotalEl.innerText = `${total.toFixed(2)} ج.م`;
+    } catch (err) { console.error("Error loading recent sales:", err); }
+}
+
+// --- ٢. نظام البحث والاقتراحات ---
+const barcodeInput = document.getElementById('barcodeInput');
+const suggestionsBox = document.getElementById('suggestionsBox');
+
+barcodeInput.addEventListener('input', async(e) => {
+    const query = e.target.value.trim();
+    if (query.length < 2) {
+        suggestionsBox.style.display = 'none';
+        return;
+    }
+
+    const products = await window.api.searchProductsSuggestions(query);
+    if (products.length > 0) {
+        suggestionsBox.innerHTML = products.map(p => `
+            <button class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" 
+                    onclick='addToBill(${JSON.stringify(p)})'>
+                <div><strong>${p.name}</strong><br><small>${p.barcode}</small></div>
+                <span class="badge bg-primary">${p.sell_price.toFixed(2)} ج.م</span>
+            </button>
+        `).join('');
+        suggestionsBox.style.display = 'block';
+    } else {
+        suggestionsBox.style.display = 'none';
+    }
+});
+
+window.addToBill = (product) => {
+    const existing = currentBill.find(item => item.id === product.id);
+    if (existing) { existing.qty += 1; } else { currentBill.push({ id: product.id, name: product.name, price: product.sell_price, qty: 1 }); }
+
+    barcodeInput.value = '';
+    suggestionsBox.style.display = 'none';
+    renderBill();
+};
+
+// --- ٣. إنهاء البيع والطباعة ---
+document.getElementById('checkoutBtn').addEventListener('click', async() => {
+    if (currentBill.length === 0) return;
+
+    const saleData = {
+        total: currentBill.reduce((sum, i) => sum + (i.price * i.qty), 0),
+        items: currentBill,
+        date: new Date().toISOString()
+    };
+
+    const result = await window.api.completeSale(saleData);
+    if (result.success) {
+        // التحقق من خيار الطباعة التلقائية
+        const shouldPrint = document.getElementById('shouldPrintReceipt').checked;
+        if (shouldPrint) {
+            const html = generateReceiptHTML(saleData);
+            window.api.printReceipt(html); // نداء دالة الطباعة من الـ Preload
+        }
+
+        alert("✅ تم البيع بنجاح");
+        currentBill = [];
+        renderBill();
+        await loadRecentSales();
+        barcodeInput.focus();
+    } else {
+        alert("❌ فشل في إتمام البيع: " + (result.message || "خطأ غير معروف"));
+    }
+});
+
+// --- ٤. حذف الفاتورة (السلة) ---
+document.getElementById('cancelBill').addEventListener('click', () => {
+    if (currentBill.length > 0) {
+        if (confirm("هل أنت متأكد من مسح الفاتورة الحالية؟")) {
+            currentBill = [];
+            renderBill();
+            barcodeInput.focus();
+        }
+    }
+});
+
+function renderBill() {
+    document.getElementById('billTableBody').innerHTML = currentBill.map((item, index) => `
+        <tr>
+            <td>${item.name}</td>
+            <td class="text-center">${item.qty}</td>
+            <td class="text-center">${(item.price * item.qty).toFixed(2)}</td>
+            <td><button class="btn btn-sm text-danger" onclick="removeFromBill(${index})">x</button></td>
+        </tr>
+    `).join('');
+    const total = currentBill.reduce((sum, i) => sum + (i.price * i.qty), 0);
+    document.getElementById('grandTotal').innerText = `${total.toFixed(2)} ج.م`;
+}
+
+window.removeFromBill = (i) => {
+    currentBill.splice(i, 1);
+    renderBill();
+};
+
+window.addEventListener('DOMContentLoaded', () => {
+    loadRecentSales();
+    barcodeInput.focus();
+});
+</file>
+
+<file path="src/renderer/src/renderer.js">
+// renderer.js - النسخة النهائية المطورة لنظام جولة
+
+// --- 1. تعريف العناصر ---
+const categoryForm = document.getElementById('categoryForm');
+const productForm = document.getElementById('productForm');
+const userForm = document.getElementById('userForm');
+const productCategorySelect = document.getElementById('productCategory');
+const inventoryTable = document.getElementById('inventoryTableBody');
+const employeeBalancesTable = document.getElementById('employeeBalancesTable');
+const searchInput = document.getElementById('searchInput'); // البحث
+
+// مودال التعديل
+const editProductModalEl = document.getElementById('editProductModal');
+const editModal = editProductModalEl ? new bootstrap.Modal(editProductModalEl) : null;
+const saveEditBtn = document.getElementById('save-edit-btn');
+
+// الإحصائيات
+const totalPurchaseValueEl = document.getElementById('totalPurchaseValue');
+const totalExpectedProfitEl = document.getElementById('totalExpectedProfit');
+const totalItemsCountEl = document.getElementById('totalItemsCount');
+
+// متغير لحفظ المنتجات مؤقتاً لعملية البحث السريع
+let allProducts = [];
+
+// --- ٢. وظائف جلب البيانات ---
+
+async function loadCategories() {
+    try {
+        const categories = await window.api.getCategories();
+        if (productCategorySelect) {
+            productCategorySelect.innerHTML = categories.map(c =>
+                `<option value="${c.id}">${c.name}</option>`
+            ).join('');
+        }
+    } catch (err) { console.error("❌ خطأ تحميل الأقسام:", err); }
+}
+
+async function loadInventory() {
+    try {
+        allProducts = await window.api.getAllProducts();
+        renderTable(allProducts);
+        updateStats(allProducts);
+    } catch (err) { console.error("❌ خطأ تحميل المخزن:", err); }
+}
+
+// دالة رسم الجدول (فصلناها عشان نستخدمها في البحث)
+function renderTable(products) {
+    if (!inventoryTable) return;
+    inventoryTable.innerHTML = products.map(p => `
+        <tr>
+            <td><small class="text-muted">${p.barcode}</small></td>
+            <td><span class="badge bg-info text-dark">${p.category_name || 'عام'}</span></td>
+            <td class="fw-bold">${p.name}</td>
+            <td><span class="badge ${p.qty < 5 ? 'bg-danger' : 'bg-light text-dark'}">${p.qty}</span></td>
+            <td>${Number(p.purchase_price).toFixed(2)}</td>
+            <td>${Number(p.sell_price).toFixed(2)}</td>
+            <td class="text-success fw-bold">${(p.sell_price - p.purchase_price).toFixed(2)}</td>
+            <td>
+                <button class="btn btn-sm btn-warning" onclick="openEditModal(${JSON.stringify(p).replace(/"/g, '&quot;')})">
+                    <i class="fas fa-edit"></i>
+                </button>
+                <button class="btn btn-sm btn-danger" onclick="handleDelete(${p.id})">
+                    <i class="fas fa-trash"></i>
+                </button>
+                <button class="btn btn-sm btn-dark" onclick="printBarcodeLabel('${p.barcode}', '${p.name}', ${p.sell_price})">
+                    <i class="fas fa-print"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function loadEmployees() {
+    try {
+        const balances = await window.api.getEmployeesBalances();
+        if (employeeBalancesTable) {
+            employeeBalancesTable.innerHTML = balances.map(b => `
+                <tr>
+                    <td>${b.username}</td>
+                    <td class="fw-bold text-primary">${(b.currentBalance || 0).toFixed(2)} ج.م</td>
+                    <td>
+                        <button class="btn btn-sm btn-success" onclick="handleSettle(${b.id})">تصفية العهدة</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+    } catch (err) { console.error("❌ خطأ تحميل الموظفين:", err); }
+}
+
+function updateStats(products) {
+    let totalP = 0,
+        totalPr = 0;
+    products.forEach(p => {
+        totalP += (p.purchase_price * p.qty);
+        totalPr += ((p.sell_price - p.purchase_price) * p.qty);
+    });
+    if (totalPurchaseValueEl) totalPurchaseValueEl.innerText = totalP.toFixed(2) + ' ج.م';
+    if (totalExpectedProfitEl) totalExpectedProfitEl.innerText = totalPr.toFixed(2) + ' ج.م';
+    if (totalItemsCountEl) totalItemsCountEl.innerText = products.length;
+}
+
+// --- ٣. البحث الذكي ---
+if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+        const term = e.target.value.toLowerCase();
+        const filtered = allProducts.filter(p =>
+            p.name.toLowerCase().includes(term) ||
+            p.barcode.toLowerCase().includes(term)
+        );
+        renderTable(filtered);
+    });
+}
+
+// --- ٤. العمليات (Actions) ---
+
+window.openEditModal = (product) => {
+    document.getElementById('edit-id').value = product.id;
+    document.getElementById('edit-name').value = product.name;
+    document.getElementById('edit-qty').value = product.qty;
+    document.getElementById('edit-purchase').value = product.purchase_price;
+    document.getElementById('edit-sell').value = product.sell_price;
+    if (editModal) editModal.show();
+};
+
+if (saveEditBtn) {
+    saveEditBtn.addEventListener('click', async() => {
+        const product = {
+            id: document.getElementById('edit-id').value,
+            name: document.getElementById('edit-name').value,
+            qty: parseInt(document.getElementById('edit-qty').value) || 0,
+            purchase_price: parseFloat(document.getElementById('edit-purchase').value) || 0,
+            sell_price: parseFloat(document.getElementById('edit-sell').value) || 0
+        };
+
+        // محاولة التعديل
+        try {
+            const result = await window.api.updateProduct(product);
+            if (result && result.success) {
+                editModal.hide();
+                await loadInventory();
+                alert('✅ تم التعديل بنجاح');
+            } else {
+                alert('❌ فشل التعديل: تأكد من تسجيل الـ Handler في الملف الرئيسي');
+            }
+        } catch (err) {
+            console.error(err);
+            alert('❌ خطأ فني: Handler غير مسجل في الـ Main');
+        }
+    });
+}
+
+window.handleDelete = async(id) => {
+    if (confirm('هل أنت متأكد من المسح النهائي؟')) {
+        const result = await window.api.deleteProduct(id);
+        if (result.success) loadInventory();
+    }
+};
+
+window.handleSettle = async(userId) => {
+    if (confirm('هل تريد تصفية عهدة الموظف؟')) {
+        const result = await window.api.settleUserSales(userId);
+        if (result.success) loadEmployees();
+    }
+};
+
+// --- ٥. الإضافات ---
+
+if (categoryForm) {
+    categoryForm.addEventListener('submit', async(e) => {
+        e.preventDefault();
+        const nameInput = document.getElementById('categoryName');
+        if (!nameInput.value) return;
+        const result = await window.api.addCategory(nameInput.value);
+        if (result.success) {
+            nameInput.value = '';
+            loadCategories();
+            alert('✅ تم إضافة القسم');
+        }
+    });
+}
+
+if (productForm) {
+    productForm.addEventListener('submit', async(e) => {
+        e.preventDefault();
+        const product = {
+            barcode: document.getElementById('productBarcode').value,
+            category_id: document.getElementById('productCategory').value,
+            name: document.getElementById('productName').value,
+            qty: parseInt(document.getElementById('productQty').value) || 0,
+            purchase_price: parseFloat(document.getElementById('purchasePrice').value) || 0,
+            sell_price: parseFloat(document.getElementById('sellPrice').value) || 0
+        };
+        const result = await window.api.addProduct(product);
+        if (result.success) {
+            productForm.reset();
+            document.getElementById('barcodeContainer').style.display = 'none';
+            loadInventory();
+            alert('✅ تم إضافة المنتج');
+        }
+    });
+}
+// إضافة موظف جديد
+if (userForm) {
+    userForm.addEventListener('submit', async(e) => {
+        e.preventDefault(); // ده السطر السحري اللي بيمنع الـ Refresh
+
+        const usernameInput = document.getElementById('newUsername');
+        const passwordInput = document.getElementById('newPassword');
+
+        const userData = {
+            username: usernameInput.value,
+            password: passwordInput.value
+        };
+
+        try {
+            // بننادي الـ API اللي عرفناه في الـ Main
+            const result = await window.api.addUser(userData);
+
+            if (result.success) {
+                alert('✅ تم إضافة الموظف بنجاح');
+                userForm.reset(); // بنفضي الحقول
+                await loadEmployees(); // بنحدث جدول الموظفين عشان يظهر الجديد
+            } else {
+                alert('❌ فشل إضافة الموظف: ممكن يكون الاسم موجود قبل كدة');
+            }
+        } catch (err) {
+            console.error("❌ خطأ في إضافة الموظف:", err);
+            alert('❌ حصل خطأ فني، راجع الـ Console');
+        }
+    });
+}
+// --- ٦. الباركود والطباعة ---
+
+const genBarcodeBtn = document.getElementById('genBarcodeBtn');
+if (genBarcodeBtn) {
+    genBarcodeBtn.addEventListener('click', () => {
+        const code = '622' + Math.floor(Math.random() * 9000000000 + 1000000000);
+        document.getElementById('productBarcode').value = code;
+        document.getElementById('barcodeContainer').style.display = 'block';
+        JsBarcode("#barcodePreview", code, { format: "CODE128", width: 2, height: 40 });
+    });
+}
+
+window.printBarcodeLabel = (barcode, name, price) => {
+    const canvas = document.createElement('canvas');
+    try {
+        JsBarcode(canvas, barcode, {
+            format: "CODE128",
+            width: 2,
+            height: 80,
+            displayValue: true,
+            fontSize: 20
+        });
+        const barcodeImg = canvas.toDataURL("image/png");
+        const labelHtml = `
+            <div style="width: 38mm; text-align: center; font-family: Arial; padding: 5px; direction: rtl;">
+                <div style="font-size: 14px; font-weight: bold; margin-bottom: 5px;">نظام جولة</div>
+                <div style="font-size: 12px; margin-bottom: 5px;">${name}</div>
+                <img src="${barcodeImg}" style="width: 100%; max-height: 50px;" />
+                <div style="font-size: 14px; font-weight: bold; margin-top: 5px;">السعر: ${price} ج.م</div>
+            </div>
+        `;
+        window.api.printReceipt(labelHtml);
+    } catch (err) {
+        alert("مشكلة في توليد الباركود");
+    }
+};
+
+// --- ٧. التشغيل ---
+
+async function init() {
+    console.log("🚀 Initializing Nizam Jawla Admin...");
+    if (window.api) {
+        await loadCategories();
+        await loadInventory();
+        await loadEmployees();
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}
+</file>
+
+<file path="src/renderer/cashier.html">
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+    <meta charset="UTF-8">
+    <title>كاشير - نظام جولة</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            background-color: #f1f3f9;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .shift-info-card {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .product-grid {
+            height: 55vh;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .bill-side {
+            background: white;
+            height: 100vh;
+            border-right: 2px solid #dee2e6;
+            padding: 20px;
+            box-shadow: -5px 0 15px rgba(0, 0, 0, 0.05);
+        }
+
+        .total-box {
+            background: #222;
+            color: #00ff00;
+            padding: 20px;
+            border-radius: 12px;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        /* --- تعديل مربع الاقتراحات الصاروخي --- */
+       .suggestions-box {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background-color: #ffffff !important; /* لون أبيض صريح */
+    border: 2px solid #0d6efd; /* برواز أزرق خفيف عشان يبان */
+    border-radius: 0 0 10px 10px;
+    z-index: 99999 !important; /* أعلى قيمة ممكنة */
+    max-height: 250px;
+    overflow-y: auto;
+    box-shadow: 0 8px 16px rgba(0,0,0,0.2) !important;
+    display: none; /* بيتحكم فيه الـ JS */
+}
+
+        .suggestions-box .list-group-item {
+            cursor: pointer;
+            padding: 12px 15px;
+            border-left: none;
+            border-right: none;
+            transition: 0.2s;
+        }
+
+        .suggestions-box .list-group-item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .table-custom-sm {
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-md-8 p-3 d-flex flex-column" style="height: 100vh;">
+
+                <div class="shift-info-card mb-3">
+                    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center py-2 px-3">
+                        <span class="small fw-bold"><i class="fas fa-cash-register me-2 text-warning"></i> عهدتك الحالية</span>
+                        <span class="badge bg-success fs-6" id="myShiftTotal">0.00 ج.م</span>
+                    </div>
+                    <div class="table-responsive" style="max-height: 120px; overflow-y: auto;">
+                        <table class="table table-sm table-hover mb-0 text-center table-custom-sm">
+                            <thead class="table-light sticky-top">
+                                <tr>
+                                    <th>رقم الفاتورة</th>
+                                    <th>الوقت</th>
+                                    <th>المبلغ</th>
+                                </tr>
+                            </thead>
+                            <tbody id="myRecentSalesTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="mb-3 position-relative">
+                    <div class="input-group input-group-lg shadow-sm">
+                        <span class="input-group-text bg-primary text-white"><i class="fas fa-barcode"></i></span>
+                        <input type="text" id="barcodeInput" class="form-control" placeholder="امسح الباركود أو ابحث عن منتج..." autofocus autocomplete="off">
+                    </div>
+                    <div id="suggestionsBox" class="list-group position-absolute w-100 suggestions-box"></div>
+                </div>
+
+                <div class="product-grid row g-3" id="productsDisplay"></div>
+            </div>
+
+            <div class="col-md-4 bill-side d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h4 class="mb-0 text-primary fw-bold"><i class="fas fa-file-invoice-dollar me-2"></i> الفاتورة</h4>
+                    <span class="text-muted small" id="currentDate"></span>
+                </div>
+
+                <div class="table-responsive flex-grow-1 border rounded bg-light">
+                    <table class="table table-sm align-middle">
+                        <thead class="table-secondary">
+                            <tr>
+                                <th>المنتج</th>
+                                <th class="text-center">الكمية</th>
+                                <th class="text-center">السعر</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="billTableBody"></tbody>
+                    </table>
+                </div>
+
+                <div class="mt-3">
+                    <div class="total-box mb-3 text-center">
+                        <small class="text-uppercase" style="letter-spacing: 2px;">الإجمالي النهائي</small>
+                        <h2 id="grandTotal" class="mb-0">0.00 ج.م</h2>
+                    </div>
+
+                    <div class="row g-2">
+                        <div class="col-12 mb-2">
+                            <div class="form-check form-switch d-flex justify-content-center align-items-center bg-light p-2 rounded border">
+                                <input class="form-check-input me-2" type="checkbox" id="shouldPrintReceipt" checked>
+                                <label class="form-check-label fw-bold" for="shouldPrintReceipt">طباعة فاتورة تلقائياً</label>
+                            </div>
+                        </div>
+                        <div class="col-8">
+                            <button id="checkoutBtn" class="btn btn-success btn-lg w-100 h-100 fw-bold">
+                                <i class="fas fa-check-circle me-2"></i> إنهاء وبيع
+                            </button>
+                        </div>
+                        <div class="col-4">
+                            <button class="btn btn-outline-danger btn-lg w-100 h-100" id="cancelBill">
+                                <i class="fas fa-trash-alt"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="./src/cashier-renderer.js"></script>
+    <script>
+        document.getElementById('currentDate').innerText = new Date().toLocaleDateString('ar-EG');
+    </script>
+</body>
+
+</html>
+</file>
+
+<file path="src/renderer/index.html">
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+    <meta charset="UTF-8">
+    <title>لوحة التحكم - نظام جولة</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body {
+            background-color: #f4f7f6;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .card {
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+            margin-bottom: 20px;
+        }
+        
+        .nav-tabs {
+            border-bottom: none;
+            gap: 10px;
+        }
+        
+        .nav-tabs .nav-link {
+            border: none;
+            font-weight: 600;
+            color: #6c757d;
+            padding: 10px 25px;
+            border-radius: 10px;
+            transition: 0.3s;
+        }
+        
+        .nav-tabs .nav-link.active {
+            background: #0d6efd;
+            color: white;
+            box-shadow: 0 4px 10px rgba(13, 110, 253, 0.3);
+        }
+        
+        .stat-card {
+            border-right: 5px solid;
+        }
+        
+        .stat-value {
+            font-size: 1.6rem;
+            font-weight: bold;
+            color: #212529;
+        }
+        
+        .table thead {
+            background-color: #f8f9fa;
+        }
+        
+        .barcode-preview-box {
+            border: 1px dashed #ccc;
+            padding: 10px;
+            border-radius: 10px;
+            background: #fff;
+            display: inline-block;
+        }
+    </style>
+</head>
+
+<body>
+
+    <nav class="navbar navbar-dark bg-primary mb-4 shadow-sm">
+        <div class="container">
+            <span class="navbar-brand mb-0 h1"><i class="fas fa-shield-alt me-2"></i> لوحة الإدارة - نظام جولة</span>
+            <button class="btn btn-outline-light btn-sm" onclick="window.location.reload()"><i class="fas fa-sync"></i> تحديث النظام</button>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="row g-3 mb-4 text-center">
+            <div class="col-md-4">
+                <div class="card p-3 stat-card border-primary">
+                    <small class="text-muted fw-bold text-uppercase">قيمة المخزن (شراء)</small>
+                    <div class="stat-value" id="totalPurchaseValue">0.00 ج.م</div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card p-3 stat-card border-success">
+                    <small class="text-muted fw-bold text-uppercase">الأرباح المتوقعة</small>
+                    <div class="stat-value" id="totalExpectedProfit">0.00 ج.م</div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card p-3 stat-card border-warning">
+                    <small class="text-muted fw-bold text-uppercase">إجمالي الأصناف</small>
+                    <div class="stat-value" id="totalItemsCount">0</div>
+                </div>
+            </div>
+        </div>
+
+        <ul class="nav nav-tabs mb-4 p-2 bg-white rounded-3 shadow-sm" id="adminTabs" role="tablist">
+            <li class="nav-item">
+                <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#list-tab"><i class="fas fa-boxes me-1"></i> المخزن</button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#add-tab"><i class="fas fa-plus-circle me-1"></i> إضافة بضاعة</button>
+            </li>
+            <li class="nav-item">
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#users-tab"><i class="fas fa-user-friends me-1"></i> الموظفين والعهدة</button>
+            </li>
+        </ul>
+
+        <div class="tab-content">
+
+            <div class="tab-pane fade show active" id="list-tab">
+                <div class="card p-4">
+                    <div class="d-flex mb-3 gap-2">
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="fas fa-search"></i></span>
+                            <input type="text" id="searchInput" class="form-control" placeholder="بحث باسم المنتج أو الباركود...">
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>القسم</th>
+                                    <th>المنتج</th>
+                                    <th>الكمية</th>
+                                    <th>الشراء</th>
+                                    <th>البيع</th>
+                                    <th>صافي الربح</th>
+                                    <th>العمليات</th>
+                                </tr>
+                            </thead>
+                            <tbody id="inventoryTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-pane fade" id="add-tab">
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="card p-4 h-100">
+                            <h5><i class="fas fa-tags me-2 text-success"></i> قسم جديد</h5>
+                            <form id="categoryForm" class="mt-3">
+                                <input type="text" class="form-control mb-3" id="categoryName" placeholder="مثلاً: إكسسوارات، موبايلات" required>
+                                <button type="submit" class="btn btn-success w-100">حفظ القسم</button>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="col-md-8">
+                        <div class="card p-4">
+                            <h5><i class="fas fa-cart-plus me-2 text-primary"></i> إضافة منتج جديد</h5>
+                            <form id="productForm" class="mt-3">
+                                <div class="row g-3">
+                                    <div class="col-md-12">
+                                        <div class="input-group">
+                                            <span class="input-group-text bg-dark text-white"><i class="fas fa-barcode"></i></span>
+                                            <input type="text" class="form-control" id="productBarcode" placeholder="امسح الباركود أو اكتبه">
+                                            <button class="btn btn-secondary" type="button" id="genBarcodeBtn">توليد آلي</button>
+                                        </div>
+                                        <div class="text-center mt-3">
+                                            <div class="barcode-preview-box" id="barcodeContainer" style="display:none;">
+                                                <svg id="barcodePreview"></svg>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label small fw-bold">القسم</label>
+                                        <select class="form-select" id="productCategory" required></select>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label small fw-bold">اسم المنتج</label>
+                                        <input type="text" class="form-control" id="productName" placeholder="مثلاً: سماعة بلوتوث" required>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label small fw-bold">الكمية</label>
+                                        <input type="number" class="form-control" id="productQty" value="1" required>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label small fw-bold">سعر الشراء</label>
+                                        <input type="number" step="0.01" class="form-control" id="purchasePrice" placeholder="0.00" required>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label small fw-bold">سعر البيع</label>
+                                        <input type="number" step="0.01" class="form-control" id="sellPrice" placeholder="0.00" required>
+                                    </div>
+                                </div>
+                                <button type="submit" class="btn btn-primary w-100 mt-4 py-2 fw-bold">إضافة للمخزن</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-pane fade" id="users-tab">
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="card p-4">
+                            <h5><i class="fas fa-user-plus me-2 text-info"></i> إضافة موظف</h5>
+                            <form id="userForm" class="mt-3">
+                                <input type="text" id="newUsername" class="form-control mb-3" placeholder="اسم المستخدم" required>
+                                <input type="password" id="newPassword" class="form-control mb-3" placeholder="كلمة المرور" required>
+                                <button type="submit" class="btn btn-info text-white w-100 fw-bold">إنشاء الحساب</button>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="col-md-8">
+                        <div class="card p-4">
+                            <h5><i class="fas fa-hand-holding-usd me-2 text-primary"></i> مراقبة العهدة والتصفية</h5>
+                            <div class="table-responsive mt-3">
+                                <table class="table table-hover">
+                                    <thead class="table-dark">
+                                        <tr>
+                                            <th>الموظف</th>
+                                            <th>العهدة الحالية</th>
+                                            <th>الإجراء</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="employeeBalancesTable">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <div class="modal fade" id="editProductModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-warning">
+                    <h5 class="modal-title fw-bold">تعديل المنتج</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="edit-id">
+                    <div class="mb-3"><label class="form-label">اسم المنتج</label><input type="text" id="edit-name" class="form-control"></div>
+                    <div class="mb-3"><label class="form-label">الكمية</label><input type="number" id="edit-qty" class="form-control"></div>
+                    <div class="mb-3"><label class="form-label">سعر الشراء</label><input type="number" id="edit-purchase" class="form-control"></div>
+                    <div class="mb-3"><label class="form-label">سعر البيع</label><input type="number" id="edit-sell" class="form-control"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+                    <button type="button" class="btn btn-warning fw-bold" id="save-edit-btn">حفظ التغييرات</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+    <script type="module" src="./src/renderer.js"></script>
+</body>
+
+</html>
+</file>
+
+<file path="src/renderer/login.html">
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+    <meta charset="UTF-8">
+    <title>تسجيل الدخول - جولة</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .login-card {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.2);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+        
+        .input-group-text {
+            background-color: #f8f9fa;
+            border-left: none;
+        }
+        
+        .form-control {
+            border-right: none;
+        }
+        
+        .btn-primary {
+            background-color: #1e3c72;
+            border: none;
+            padding: 12px;
+            font-weight: bold;
+        }
+        
+        .btn-primary:hover {
+            background-color: #2a5298;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="login-card shadow">
+        <div class="text-primary mb-3">
+            <i class="fas fa-user-lock fa-4x"></i>
+        </div>
+        <h3 class="mb-2 fw-bold text-dark">نظام جولة</h3>
+        <p class="text-muted mb-4">إدارة المبيعات والمخازن</p>
+
+        <div class="mb-3">
+            <div class="input-group">
+                <span class="input-group-text"><i class="fas fa-user text-muted"></i></span>
+                <input type="text" id="username" class="form-control form-control-lg" placeholder="اسم المستخدم" required>
+            </div>
+        </div>
+
+        <div class="mb-4">
+            <div class="input-group">
+                <span class="input-group-text"><i class="fas fa-key text-muted"></i></span>
+                <input type="password" id="password" class="form-control form-control-lg" placeholder="كلمة المرور" required>
+            </div>
+        </div>
+
+        <button class="btn btn-primary btn-lg w-100 mb-3" id="loginBtn">
+            <i class="fas fa-sign-in-alt me-2"></i> دخول للنظام
+        </button>
+
+        <p class="text-danger small d-none" id="errorMsg">خطأ في اسم المستخدم أو كلمة المرور!</p>
+    </div>
+
+    <script>
+        const loginBtn = document.getElementById('loginBtn');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const errorMsg = document.getElementById('errorMsg');
+
+        // دالة إرسال البيانات
+        async function attemptLogin() {
+            const username = usernameInput.value.trim();
+            const password = passwordInput.value;
+
+            if (!username || !password) {
+                alert("يرجى إدخال كافة البيانات");
+                return;
+            }
+
+            // إرسال البيانات للـ Main Process
+            // ملاحظة: تأكد أن اسم الدالة في preload هو window.api.login
+            window.api.login({
+                username: username,
+                password: password
+            });
+        }
+
+        // عند الضغط على الزر
+        loginBtn.addEventListener('click', attemptLogin);
+
+        // تفعيل الدخول بمجرد الضغط على Enter
+        [usernameInput, passwordInput].forEach(el => {
+            el.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') attemptLogin();
+            });
+        });
+
+        // استقبال رسائل الخطأ من الـ Main (اختياري)
+        if (window.api.onLoginError) {
+            window.api.onLoginError((msg) => {
+                errorMsg.innerText = msg;
+                errorMsg.classList.remove('d-none');
+            });
+        }
+    </script>
+</body>
+
+</html>
+</file>
+
+<file path=".gitignore">
+node_modules
+</file>
+
+<file path="dev-app-update.yml">
+provider: generic
+url: https://example.com/auto-updates
+updaterCacheDirName: nezam-pos-updater
+</file>
+
+<file path="electron-builder.yml">
+appId: com.electron.app
+productName: nezam-pos
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+asarUnpack:
+  - resources/**
+win:
+  executableName: nezam-pos
+nsis:
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
+mac:
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    - NSCameraUsageDescription: Application requests access to the device's camera.
+    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
+    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
+    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+  notarize: false
+dmg:
+  artifactName: ${name}-${version}.${ext}
+linux:
+  target:
+    - AppImage
+    - snap
+    - deb
+  maintainer: electronjs.org
+  category: Utility
+appImage:
+  artifactName: ${name}-${version}.${ext}
+npmRebuild: false
+publish:
+  provider: generic
+  url: https://example.com/auto-updates
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
+</file>
+
+<file path="electron.vite.config.mjs">
+import { resolve } from 'path'
+import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+
+export default defineConfig({
+  main: {
+    plugins: [externalizeDepsPlugin()]
+  },
+  preload: {
+    plugins: [externalizeDepsPlugin()]
+  },
+  renderer: {
+    build: {
+      rollupOptions: {
+        input: {
+          // هنا بنعرف كل شاشة بملف الـ HTML بتاعها
+          // تأكد إن المسارات دي مطابقة لمكان الملفات عندك في src/renderer
+          login: resolve(__dirname, 'src/renderer/login.html'),
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          cashier: resolve(__dirname, 'src/renderer/cashier.html')
+        }
+      }
+    }
+  }
+})
+</file>
+
+<file path="eslint.config.mjs">
+import eslintConfig from '@electron-toolkit/eslint-config'
+import eslintConfigPrettier from '@electron-toolkit/eslint-config-prettier'
+
+export default [
+  { ignores: ['**/node_modules', '**/dist', '**/out'] },
+  eslintConfig,
+  eslintConfigPrettier
+]
+</file>
+
+<file path="package.json">
+{
+    "name": "nezam-pos",
+    "version": "1.0.0",
+    "description": "نظام جولة لإدارة المبيعات",
+    "main": "./out/main/index.js",
+    "author": "Amer",
+    "homepage": "https://electron-vite.org",
+    "scripts": {
+        "format": "prettier --write .",
+        "lint": "eslint --cache .",
+        "dev": "electron-vite dev",
+        "build": "electron-vite build",
+        "postinstall": "electron-builder install-app-deps",
+        "rebuild": "electron-rebuild -f -w better-sqlite3",
+        "build:unpack": "npm run build && electron-builder --dir",
+        "build:win": "npm run build && electron-builder --win --x64",
+        "start": "electron .",
+        "dist": "npm run build && electron-builder --win --x64"
+    },
+    "dependencies": {
+        "@electron-toolkit/preload": "^3.0.2",
+        "@electron-toolkit/utils": "^4.0.0",
+        "all": "^0.0.0",
+        "better-sqlite3": "^12.6.2",
+        "electron-updater": "^6.3.9"
+    },
+    "devDependencies": {
+        "@electron-toolkit/eslint-config": "^2.1.0",
+        "@electron-toolkit/eslint-config-prettier": "^3.0.0",
+        "electron": "^39.2.6",
+        "electron-builder": "^26.0.12",
+        "electron-rebuild": "^3.2.9",
+        "electron-vite": "^5.0.0",
+        "eslint": "^9.39.1",
+        "prettier": "^3.7.4",
+        "vite": "^7.2.6"
+    },
+    "build": {
+        "appId": "com.amer.nezampos",
+        "productName": "Nezam POS",
+        "directories": {
+            "output": "dist"
+        },
+        "files": [
+            "out/**/*",
+            "resources/**/*"
+        ],
+        "win": {
+            "target": [
+                {
+                    "target": "nsis",
+                    "arch": [
+                        "x64"
+                    ]
+                }
+            ]
+        },
+        "nsis": {
+            "oneClick": false,
+            "allowToChangeInstallationDirectory": true,
+            "shortcutName": "Nezam POS",
+            "createDesktopShortcut": true
+        },
+        "asar": true,
+        "asarUnpack": [
+            "**/node_modules/better-sqlite3/**/*"
+        ]
+    }
+}
+</file>
+
+<file path="README.md">
+# nezam-pos
+
+A minimal Electron application with JavaScript
+
+## Recommended IDE Setup
+
+- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
+
+## Project Setup
+
+### Install
+
+```bash
+$ npm install
+```
+
+### Development
+
+```bash
+$ npm run dev
+```
+
+### Build
+
+```bash
+# For windows
+$ npm run build:win
+
+# For macOS
+$ npm run build:mac
+
+# For Linux
+$ npm run build:linux
+```
+</file>
+
+</files>

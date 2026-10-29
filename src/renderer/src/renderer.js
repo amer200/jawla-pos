@@ -230,16 +230,19 @@ window.openEditModalById = function(id) {
     }
 };
 
+
 window.openEditModal = function(product) {
     if (!product) return;
 
     var editId = document.getElementById('edit-id');
+    var editBarcode = document.getElementById('edit-barcode');
     var editName = document.getElementById('edit-name');
     var editQty = document.getElementById('edit-qty');
     var editPurchase = document.getElementById('edit-purchase');
     var editSell = document.getElementById('edit-sell');
 
     if (editId) editId.value = product.id;
+    if (editBarcode) editBarcode.value = product.barcode || '';
     if (editName) editName.value = product.name;
     if (editQty) editQty.value = product.qty;
     if (editPurchase) editPurchase.value = product.purchase_price;
@@ -260,6 +263,7 @@ window.openEditModal = function(product) {
 if (saveEditBtn) {
     saveEditBtn.addEventListener('click', async function() {
         var editId = document.getElementById('edit-id');
+        var editBarcode = document.getElementById('edit-barcode');
         var editName = document.getElementById('edit-name');
         var editQty = document.getElementById('edit-qty');
         var editPurchase = document.getElementById('edit-purchase');
@@ -272,6 +276,7 @@ if (saveEditBtn) {
 
         var product = {
             id: editId ? editId.value : '',
+            barcode: editBarcode ? editBarcode.value.trim() : '',
             name: editName.value.trim(),
             qty: editQty ? (parseFloat(editQty.value) || 0) : 0,
             purchase_price: editPurchase ? (parseFloat(editPurchase.value) || 0) : 0,
@@ -291,9 +296,9 @@ if (saveEditBtn) {
                     }
                 }
                 await loadInventory();
-                alert('✅ تم التعديل بنجاح');
+                alert('✅ تم التعديل وحفظ الباركود بنجاح');
             } else {
-                alert('❌ فشل التعديل');
+                alert('❌ فشل التعديل: ' + (result && result.error ? result.error : ''));
             }
         } catch (err) {
             console.error(err);
@@ -436,11 +441,10 @@ window.printBarcodeLabelById = function(id) {
         }
     }
     if (product) {
-        window.printBarcodeLabel(product.barcode, product.name, product.sell_price);
+        window.printBarcodeLabel(product.barcode);
     }
 };
-
-window.printBarcodeLabel = function(barcode, name, price) {
+window.printBarcodeLabel = function(barcode) {
     if (!barcode) {
         alert("⚠️ هذا المنتج لا يحتوي على باركود لطباعته");
         return;
@@ -455,39 +459,40 @@ window.printBarcodeLabel = function(barcode, name, price) {
     try {
         JsBarcode(canvas, barcode, {
             format: "CODE128",
-            width: 1.8,
-            height: 45,
+            width: 2,
+            height: 50,
             displayValue: true,
-            fontSize: 12,
-            margin: 0
+            fontSize: 15,
+            font: "monospace",
+            textMargin: 2,
+            margin: 2
         });
 
         var barcodeImg = canvas.toDataURL("image/png");
-        var displayPrice = Number(price) || 0;
 
         var labelHtml = '<!DOCTYPE html>' +
-            '<html lang="ar" dir="rtl">' +
+            '<html>' +
             '<head>' +
             '<meta charset="UTF-8">' +
+            '<title>ملصق باركود</title>' +
             '<style>' +
-            '@page { size: 38mm 25mm; margin: 0; }' +
+            '@page { size: 38mm 25mm landscape; margin: 0; }' +
             '* { box-sizing: border-box; margin: 0; padding: 0; }' +
-            'body { width: 38mm; height: 25mm; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; align-items: center; font-family: Arial, sans-serif; padding: 2mm; background: #fff; color: #000; text-align: center; }' +
-            '.shop-title { font-size: 9px; font-weight: bold; line-height: 1; }' +
-            '.prod-name { font-size: 8px; font-weight: bold; line-height: 1; max-width: 34mm; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }' +
-            '.barcode-box img { width: 32mm; max-height: 12mm; }' +
-            '.prod-price { font-size: 9px; font-weight: bold; line-height: 1; }' +
+            'body { width: 38mm; height: 25mm; overflow: hidden; display: flex; justify-content: center; align-items: center; background: #fff; margin: 0; padding: 1mm; }' +
+            '.barcode-img { width: 36mm; max-height: 23mm; object-fit: contain; }' +
             '</style>' +
             '</head>' +
             '<body>' +
-            '<div class="shop-title">نظام جولة</div>' +
-            '<div class="prod-name">' + name + '</div>' +
-            '<div class="barcode-box"><img src="' + barcodeImg + '" /></div>' +
-            '<div class="prod-price">السعر: ' + displayPrice.toFixed(2) + ' ج.م</div>' +
+            '<img class="barcode-img" src="' + barcodeImg + '" />' +
             '</body>' +
             '</html>';
 
-        window.api.printReceipt(labelHtml);
+        // إرسال نوع الطباعة كملصق صراحة
+        window.api.printReceipt({
+            html: labelHtml,
+            isLabel: true
+        });
+
     } catch (err) {
         console.error(err);
         alert("مشكلة في توليد الباركود");

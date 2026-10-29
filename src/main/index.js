@@ -157,19 +157,93 @@ app.whenReady().then(() => {
         }
     });
 
+    // تحديث المنتج مع حماية الباركود من المسح العرضي
     ipcMain.handle('update-product', (e, p) => {
         try {
+            const existing = db.prepare('SELECT barcode, category_id FROM products WHERE id = ?').get(p.id);
+            if (!existing) return { success: false, error: 'المنتج غير موجود' };
+
+            // إذا تُرك حقل الباركود فارغاً، نحتفظ بالباركود المسجل مسبقاً في الداتابيز
+            let barcodeToSave = existing.barcode;
+            if (p.barcode !== undefined && p.barcode !== null && String(p.barcode).trim() !== '') {
+                barcodeToSave = String(p.barcode).trim();
+            }
+
+            const categoryToSave = (p.category_id !== undefined && p.category_id !== null && p.category_id !== '') ?
+                p.category_id :
+                existing.category_id;
+
             db.prepare(`
                 UPDATE products 
                 SET name = ?, barcode = ?, category_id = ?, qty = ?, purchase_price = ?, sell_price = ?
                 WHERE id = ?
-            `).run(p.name, p.barcode || null, p.category_id || null, p.qty, p.purchase_price, p.sell_price, p.id);
+            `).run(p.name, barcodeToSave, categoryToSave, p.qty, p.purchase_price, p.sell_price, p.id);
+
             return { success: true };
         } catch (err) {
+            console.error('Update Product Error:', err);
             return { success: false, error: err.message };
         }
     });
 
+    // معالج الطباعة الآمن والشامل
+    // معالج الطباعة الموحد: يفرّق تلقائياً بين الفاتورة والملصق
+    ipcMain.on('print-receipt', (event, payload) => {
+        let receiptHtml = '';
+        let printerName = '';
+        let isLabel = false;
+
+        if (typeof payload === 'string') {
+            receiptHtml = payload;
+            isLabel = receiptHtml.includes('38mm') || receiptHtml.includes('ملصق باركود');
+        } else if (payload && typeof payload === 'object') {
+            receiptHtml = payload.html || '';
+            printerName = payload.printerName || '';
+            isLabel = payload.isLabel || receiptHtml.includes('38mm') || receiptHtml.includes('ملصق باركود');
+        }
+
+        if (!receiptHtml) return;
+
+        const printWindow = new BrowserWindow({
+            show: false,
+            webPreferences: {
+                sandbox: true,
+                contextIsolation: true,
+                nodeIntegration: false
+            }
+        });
+
+        const encodedData = encodeURIComponent(receiptHtml);
+        printWindow.loadURL(`data:text/html;charset=utf-8,${encodedData}`);
+
+        printWindow.webContents.on('did-finish-load', () => {
+            setTimeout(() => {
+                const printOptions = {
+                    silent: true,
+                    printBackground: true,
+                    color: false,
+                    margin: { marginType: 'none' }
+                };
+
+                if (isLabel) {
+                    // مقاس ستيكر الباركود: 38 مم عرض × 25 مم ارتفاع
+                    printOptions.pageSize = { width: 38000, height: 25000 };
+                } else {
+                    // مقاس الفاتورة: 80 مم عرض × 200 مم ارتفاع
+                    printOptions.pageSize = { width: 80000, height: 200000 };
+                }
+
+                if (printerName && printerName.trim() !== '') {
+                    printOptions.deviceName = printerName.trim();
+                }
+
+                printWindow.webContents.print(printOptions, (success, failureReason) => {
+                    if (!success) console.error('Printing failed:', failureReason);
+                    printWindow.close();
+                });
+            }, 250);
+        });
+    });
     ipcMain.handle('delete-product', (e, id) => {
         try {
             db.prepare('DELETE FROM products WHERE id = ?').run(id);
@@ -293,71 +367,6 @@ app.whenReady().then(() => {
         const win = BrowserWindow.getFocusedWindow() || loginWindow || adminWindow || cashierWindow;
         if (!win) return [];
         return await win.webContents.getPrintersAsync();
-    });
-
-    // 2. معالج الطباعة المحسن والصامت بدون أخطاء
-    ipcMain.on('print-receipt', (event, { html, printerName, isLabel }) => {
-        const printWindow = new BrowserWindow({
-            show: false,
-            webPreferences: {
-                sandbox: true,
-                contextIsolation: true,
-                nodeIntegration: false
-            }
-        });
-
-        const encodedData = encodeURIComponent(html);
-        printWindow.loadURL(`data:text/html;charset=utf-8,${encodedData}`);
-
-        printWindow.webContents.on('did-finish-load', () => {
-            // تأخير زمني 250ms لضمان اكتمال فك تشفير وتصيير صورة الباركود في الذاكرة
-            setTimeout(() => {
-                const printOptions = {
-                    silent: true, // طباعة فورية صامتة عند العميل
-                    printBackground: true,
-                    color: false,
-                    margin: { marginType: 'none' } // إلغاء الهوامش الافتراضية
-                };
-
-                // توجيه الطباعة لطابعة محددة بالاسم إذا تم اختيارها
-                if (printerName && printerName.trim() !== '') {
-                    printOptions.deviceName = printerName;
-                }
-
-                printWindow.webContents.print(printOptions, (success, failureReason) => {
-                    if (!success) {
-                        console.error('❌ Printing Failed:', failureReason);
-                    }
-                    printWindow.close();
-                });
-            }, 250);
-        });
-    });
-    // --- الطباعة الآمنة ---
-    ipcMain.on('print-receipt', (event, receiptHtml) => {
-        const printWindow = new BrowserWindow({
-            show: true,
-            webPreferences: {
-                sandbox: true,
-                contextIsolation: true,
-                nodeIntegration: false
-            }
-        });
-
-        const encodedData = encodeURIComponent(receiptHtml);
-        printWindow.loadURL(`data:text/html;charset=utf-8,${encodedData}`);
-
-        printWindow.webContents.on('did-finish-load', () => {
-            printWindow.webContents.print({
-                silent: true,
-                printBackground: true,
-                color: false,
-                margin: { marginType: 'none' }
-            }, (success, failureReason) => {
-                if (!success) console.error('Printing failed:', failureReason);
-                printWindow.close();
-            });
-        });
     });
     ipcMain.on('app:close', () => app.quit());
     createLoginWindow();
